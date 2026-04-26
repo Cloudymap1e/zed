@@ -4116,7 +4116,6 @@ dependencies = [
  "mach2 0.5.0",
  "minidumper",
  "parking_lot",
- "paths",
  "serde",
  "serde_json",
  "system_specs",

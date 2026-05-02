@@ -186,3 +186,15 @@ Rules emerge from validated patterns, not one-off observations. The workflow is:
 1. Agent notes a pattern during a session.
 2. Team validates the pattern in code review.
 3. A dedicated commit adds the rule with context on *why* it exists.
+
+<!-- BEGIN:gs75-project-location -->
+
+## GS75 Project Location
+
+- Canonical gs75 project root: `/home/rc/project`.
+- This project's gs75 path: `/home/rc/project/zed`.
+- Legacy compatibility path: `/home/rc/Project/zed`
+- Organization manifest on gs75: `/home/rc/project/.organization/gs75-project-organization-20260502T054508Z.tsv`.
+- Do not create new project checkouts directly under `/home/rc`, `/home/rc/Project`, `/home/rc/apps`, or `/srv`; place them under `/home/rc/project` and keep old paths as symlinks only when needed for service compatibility.
+
+<!-- END:gs75-project-location -->

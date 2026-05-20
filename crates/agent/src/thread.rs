@@ -33,11 +33,11 @@ use gpui::{
 use heck::ToSnakeCase as _;
 use language_model::{
     CompletionIntent, LanguageModel, LanguageModelCompletionError, LanguageModelCompletionEvent,
-    LanguageModelId, LanguageModelImage, LanguageModelProviderId, LanguageModelRegistry,
-    LanguageModelRequest, LanguageModelRequestMessage, LanguageModelRequestTool,
-    LanguageModelToolResult, LanguageModelToolResultContent, LanguageModelToolSchemaFormat,
-    LanguageModelToolUse, LanguageModelToolUseId, Role, SelectedModel, Speed, StopReason,
-    TokenUsage, ZED_CLOUD_PROVIDER_ID,
+    LanguageModelCostInfo, LanguageModelId, LanguageModelImage, LanguageModelProviderId,
+    LanguageModelRegistry, LanguageModelRequest, LanguageModelRequestMessage,
+    LanguageModelRequestTool, LanguageModelToolResult, LanguageModelToolResultContent,
+    LanguageModelToolSchemaFormat, LanguageModelToolUse, LanguageModelToolUseId, Role,
+    SelectedModel, Speed, StopReason, TokenUsage, ZED_CLOUD_PROVIDER_ID,
 };
 use project::Project;
 use prompt_store::ProjectContext;
@@ -1428,12 +1428,12 @@ impl Thread {
     }
 
     pub fn set_model(&mut self, model: Arc<dyn LanguageModel>, cx: &mut Context<Self>) {
-        let old_usage = self.latest_token_usage();
+        let old_usage = self.latest_session_usage(cx);
         self.model = Some(model.clone());
         let new_caps = Self::prompt_capabilities(self.model.as_deref());
-        let new_usage = self.latest_token_usage();
+        let new_usage = self.latest_session_usage(cx);
         if old_usage != new_usage {
-            cx.emit(TokenUsageUpdated(new_usage));
+            cx.emit(SessionUsageUpdated(new_usage));
         }
         self.prompt_capabilities_tx.send(new_caps).log_err();
 
@@ -1655,7 +1655,7 @@ impl Thread {
 
         self.request_token_usage
             .insert(last_user_message.id.clone(), update);
-        cx.emit(TokenUsageUpdated(self.latest_token_usage()));
+        cx.emit(SessionUsageUpdated(self.latest_session_usage(cx)));
         cx.notify();
     }
 
@@ -1698,6 +1698,62 @@ impl Thread {
             used_tokens: usage.total_tokens(),
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,
+        })
+    }
+
+    pub fn latest_session_usage(&self, cx: &App) -> SessionUsage {
+        let token_usage = self.latest_token_usage();
+        SessionUsage {
+            cost: self.estimated_session_cost_with_settings(cx),
+            token_usage,
+        }
+    }
+
+    fn session_cost_token_usage(&self) -> language_model::TokenUsage {
+        self.request_token_usage
+            .values()
+            .copied()
+            .fold(language_model::TokenUsage::default(), |total, usage| {
+                total + usage
+            })
+    }
+
+    pub fn estimated_session_cost(&self) -> Option<acp_thread::SessionCost> {
+        let cost_info = self.model.as_ref()?.model_cost_info()?;
+        self.estimated_session_cost_from_pricing(&cost_info, "USD".into())
+    }
+
+    fn estimated_session_cost_with_settings(&self, cx: &App) -> Option<acp_thread::SessionCost> {
+        let model = self.model.as_ref()?;
+        let model_id = format!("{}/{}", model.provider_id().0, model.id().0);
+        if let Some(cost_override) = AgentSettings::get_global(cx)
+            .model_cost_overrides
+            .get(model_id.as_str())
+        {
+            return self.estimated_session_cost_from_pricing(
+                &cost_override.cost_info,
+                cost_override.currency.clone(),
+            );
+        }
+
+        let cost_info = model.model_cost_info()?;
+        self.estimated_session_cost_from_pricing(&cost_info, "USD".into())
+    }
+
+    fn estimated_session_cost_from_pricing(
+        &self,
+        cost_info: &LanguageModelCostInfo,
+        currency: SharedString,
+    ) -> Option<acp_thread::SessionCost> {
+        let usage = self.session_cost_token_usage();
+        if usage.total_tokens() == 0 {
+            return None;
+        }
+
+        Some(acp_thread::SessionCost {
+            amount: cost_info.estimate_session_cost(&usage)?,
+            currency,
+            source: acp_thread::SessionCostSource::Estimated,
         })
     }
 
@@ -3204,9 +3260,31 @@ impl RunningTurn {
     }
 }
 
-pub struct TokenUsageUpdated(pub Option<acp_thread::TokenUsage>);
+#[derive(Clone, Debug)]
+pub struct SessionUsage {
+    pub token_usage: Option<acp_thread::TokenUsage>,
+    pub cost: Option<acp_thread::SessionCost>,
+}
 
-impl EventEmitter<TokenUsageUpdated> for Thread {}
+impl PartialEq for SessionUsage {
+    fn eq(&self, other: &Self) -> bool {
+        self.token_usage == other.token_usage
+            && self.cost.as_ref().map(session_cost_eq_key)
+                == other.cost.as_ref().map(session_cost_eq_key)
+    }
+}
+
+fn session_cost_eq_key(
+    cost: &acp_thread::SessionCost,
+) -> (u64, &str, acp_thread::SessionCostSource) {
+    (cost.amount.to_bits(), cost.currency.as_ref(), cost.source)
+}
+
+pub struct SessionUsageUpdated(pub SessionUsage);
+
+impl EventEmitter<SessionUsageUpdated> for Thread {}
+
+pub type TokenUsageUpdated = SessionUsageUpdated;
 
 pub struct TitleUpdated;
 

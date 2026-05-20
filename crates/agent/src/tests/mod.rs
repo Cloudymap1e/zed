@@ -26,10 +26,10 @@ use gpui::{
 use indoc::indoc;
 use language_model::{
     CompletionIntent, LanguageModel, LanguageModelCompletionError, LanguageModelCompletionEvent,
-    LanguageModelId, LanguageModelProviderName, LanguageModelRegistry, LanguageModelRequest,
-    LanguageModelRequestMessage, LanguageModelToolResult, LanguageModelToolSchemaFormat,
-    LanguageModelToolUse, MessageContent, Role, StopReason, TokenUsage,
-    fake_provider::FakeLanguageModel,
+    LanguageModelCostInfo, LanguageModelId, LanguageModelProviderName, LanguageModelRegistry,
+    LanguageModelRequest, LanguageModelRequestMessage, LanguageModelToolResult,
+    LanguageModelToolSchemaFormat, LanguageModelToolUse, MessageContent, Role, StopReason,
+    TokenUsage, fake_provider::FakeLanguageModel,
 };
 use pretty_assertions::assert_eq;
 use project::{
@@ -3120,6 +3120,131 @@ async fn test_truncate_first_message(cx: &mut TestAppContext) {
                 output_tokens: 20_000,
             })
         );
+    });
+}
+
+#[gpui::test]
+async fn test_estimated_session_cost_uses_cumulative_token_usage(cx: &mut TestAppContext) {
+    let ThreadTest { model, thread, .. } = setup(cx, TestModel::Fake).await;
+    let fake_model = model.as_fake();
+    fake_model.set_model_cost_info(Some(LanguageModelCostInfo::TokenCost {
+        input_token_cost_per_1m: 3.0,
+        output_token_cost_per_1m: 12.0,
+    }));
+
+    thread.update(cx, |thread, cx| {
+        thread
+            .send(UserMessageId::new(), ["Message 1"], cx)
+            .unwrap();
+    });
+    cx.run_until_parked();
+    fake_model.send_last_completion_stream_text_chunk("Response 1");
+    fake_model.send_last_completion_stream_event(LanguageModelCompletionEvent::UsageUpdate(
+        language_model::TokenUsage {
+            input_tokens: 1_000,
+            output_tokens: 500,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+        },
+    ));
+    cx.run_until_parked();
+
+    thread.read_with(cx, |thread, _| {
+        let cost = thread
+            .estimated_session_cost()
+            .expect("estimated session cost should be available");
+        assert!((cost.amount - 0.009).abs() < f64::EPSILON);
+        assert_eq!(cost.currency.as_ref(), "USD");
+        assert_eq!(cost.source, acp_thread::SessionCostSource::Estimated);
+    });
+
+    fake_model.end_last_completion_stream();
+    thread.update(cx, |thread, cx| {
+        thread
+            .send(UserMessageId::new(), ["Message 2"], cx)
+            .unwrap();
+    });
+    cx.run_until_parked();
+    fake_model.send_last_completion_stream_event(LanguageModelCompletionEvent::UsageUpdate(
+        language_model::TokenUsage {
+            input_tokens: 2_000,
+            output_tokens: 250,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+        },
+    ));
+    cx.run_until_parked();
+
+    thread.read_with(cx, |thread, _| {
+        let cost = thread
+            .estimated_session_cost()
+            .expect("estimated session cost should be cumulative");
+        assert!((cost.amount - 0.018).abs() < f64::EPSILON);
+        assert_eq!(
+            thread.latest_token_usage(),
+            Some(acp_thread::TokenUsage {
+                used_tokens: 2_250,
+                max_tokens: 1_000_000,
+                max_output_tokens: None,
+                input_tokens: 2_000,
+                output_tokens: 250,
+            })
+        );
+    });
+}
+
+#[gpui::test]
+async fn test_latest_session_usage_uses_model_cost_override(cx: &mut TestAppContext) {
+    let ThreadTest { model, thread, .. } = setup(cx, TestModel::Fake).await;
+    let fake_model = model.as_fake();
+    fake_model.set_model_cost_info(Some(LanguageModelCostInfo::TokenCost {
+        input_token_cost_per_1m: 99.0,
+        output_token_cost_per_1m: 99.0,
+    }));
+
+    cx.update(|cx| {
+        SettingsStore::update_global(cx, |store, cx| {
+            store
+                .set_user_settings(
+                    r#"{
+                        "agent": {
+                            "model_cost_overrides": {
+                                "fake/fake": {
+                                    "input_token_cost_per_1m": 3.0,
+                                    "output_token_cost_per_1m": 12.0,
+                                    "currency": "EUR"
+                                }
+                            }
+                        }
+                    }"#,
+                    cx,
+                )
+                .unwrap();
+        });
+    });
+
+    thread.update(cx, |thread, cx| {
+        thread.send(UserMessageId::new(), ["Message"], cx).unwrap();
+    });
+    cx.run_until_parked();
+    fake_model.send_last_completion_stream_event(LanguageModelCompletionEvent::UsageUpdate(
+        language_model::TokenUsage {
+            input_tokens: 1_000,
+            output_tokens: 500,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+        },
+    ));
+    cx.run_until_parked();
+
+    thread.read_with(cx, |thread, cx| {
+        let cost = thread
+            .latest_session_usage(cx)
+            .cost
+            .expect("estimated session cost should use settings override");
+        assert!((cost.amount - 0.009).abs() < f64::EPSILON);
+        assert_eq!(cost.currency.as_ref(), "EUR");
+        assert_eq!(cost.source, acp_thread::SessionCostSource::Estimated);
     });
 }
 

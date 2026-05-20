@@ -66,6 +66,46 @@ pub fn meta_with_tool_name(tool_name: &str) -> acp::Meta {
     acp::Meta::from_iter([(TOOL_NAME_META_KEY.into(), tool_name.into())])
 }
 
+pub const SESSION_TOKEN_USAGE_META_KEY: &str = "zed.private.token_usage";
+
+/// Private ACP extension used by Zed-maintained agents to send cumulative
+/// token breakdowns until ACP standardizes detailed session usage.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionTokenUsageMeta {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
+}
+
+impl SessionTokenUsageMeta {
+    pub fn total_tokens(&self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.cache_read_input_tokens)
+            .saturating_add(self.cache_creation_input_tokens)
+    }
+}
+
+pub fn meta_with_session_token_usage(usage: SessionTokenUsageMeta) -> acp::Meta {
+    let mut meta = acp::Meta::new();
+    meta.insert(
+        SESSION_TOKEN_USAGE_META_KEY.into(),
+        serde_json::json!(usage),
+    );
+    meta
+}
+
+pub fn session_token_usage_from_meta(meta: &Option<acp::Meta>) -> Option<SessionTokenUsageMeta> {
+    meta.as_ref()
+        .and_then(|meta| meta.get(SESSION_TOKEN_USAGE_META_KEY))
+        .and_then(|value| serde_json::from_value(value.clone()).log_err())
+}
+
 /// Key used in ACP ToolCall meta to store the session id and message indexes
 pub const SUBAGENT_SESSION_INFO_META_KEY: &str = "subagent_session_info";
 
@@ -986,6 +1026,13 @@ pub struct TokenUsage {
 pub struct SessionCost {
     pub amount: f64,
     pub currency: SharedString,
+    pub source: SessionCostSource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionCostSource {
+    Reported,
+    Estimated,
 }
 
 pub const TOKEN_USAGE_WARNING_THRESHOLD: f32 = 0.8;
@@ -1486,14 +1533,21 @@ impl AcpThread {
                 config_options,
                 ..
             }) => cx.emit(AcpThreadEvent::ConfigOptionsUpdated(config_options)),
-            acp::SessionUpdate::UsageUpdate(update) if cx.has_flag::<AcpBetaFeatureFlag>() => {
+            acp::SessionUpdate::UsageUpdate(update) => {
+                let token_usage = session_token_usage_from_meta(&update.meta);
                 let usage = self.token_usage.get_or_insert_with(Default::default);
                 usage.max_tokens = update.size;
                 usage.used_tokens = update.used;
+                if let Some(token_usage) = token_usage {
+                    usage.input_tokens = token_usage.input_tokens;
+                    usage.output_tokens = token_usage.output_tokens;
+                    usage.used_tokens = update.used.max(token_usage.total_tokens());
+                }
                 if let Some(cost) = update.cost {
                     self.cost = Some(SessionCost {
                         amount: cost.amount,
                         currency: cost.currency.into(),
+                        source: SessionCostSource::Reported,
                     });
                 }
                 cx.emit(AcpThreadEvent::TokenUsageUpdated);
@@ -1799,6 +1853,32 @@ impl AcpThread {
         }
         self.token_usage = usage;
         cx.emit(AcpThreadEvent::TokenUsageUpdated);
+    }
+
+    pub fn update_session_usage(
+        &mut self,
+        usage: Option<TokenUsage>,
+        cost: Option<SessionCost>,
+        cx: &mut Context<Self>,
+    ) {
+        if usage.is_none() {
+            self.cost = None;
+        } else {
+            self.cost = cost;
+        }
+        self.token_usage = usage;
+        cx.emit(AcpThreadEvent::TokenUsageUpdated);
+    }
+
+    pub fn clear_estimated_cost(&mut self, cx: &mut Context<Self>) {
+        if self
+            .cost
+            .as_ref()
+            .is_some_and(|cost| cost.source == SessionCostSource::Estimated)
+        {
+            self.cost = None;
+            cx.emit(AcpThreadEvent::TokenUsageUpdated);
+        }
     }
 
     pub fn update_retry_status(&mut self, status: RetryStatus, cx: &mut Context<Self>) {
@@ -5376,6 +5456,49 @@ mod tests {
             let cost = thread.cost().expect("cost should be set");
             assert!((cost.amount - 0.42).abs() < f64::EPSILON);
             assert_eq!(cost.currency.as_ref(), "USD");
+            assert_eq!(cost.source, SessionCostSource::Reported);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_usage_update_populates_token_breakdown_from_private_meta(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, [], cx).await;
+        let connection = Rc::new(FakeAgentConnection::new());
+        let thread = cx
+            .update(|cx| {
+                connection.new_session(project, PathList::new(&[Path::new(path!("/test"))]), cx)
+            })
+            .await
+            .unwrap();
+
+        let meta = meta_with_session_token_usage(SessionTokenUsageMeta {
+            input_tokens: 1_000,
+            output_tokens: 500,
+            cache_read_input_tokens: 25,
+            cache_creation_input_tokens: 50,
+        });
+
+        thread.update(cx, |thread, cx| {
+            thread
+                .handle_session_update(
+                    acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(1500, 10000).meta(meta)),
+                    cx,
+                )
+                .unwrap();
+        });
+
+        thread.read_with(cx, |thread, _| {
+            let usage = thread.token_usage().expect("token_usage should be set");
+            assert_eq!(usage.max_tokens, 10000);
+            assert_eq!(usage.used_tokens, 1_575);
+            assert_eq!(usage.input_tokens, 1_000);
+            assert_eq!(usage.output_tokens, 500);
+            assert!(thread.cost().is_none());
         });
     }
 
@@ -5417,6 +5540,49 @@ mod tests {
 
             let cost = thread.cost().expect("cost should be preserved");
             assert!((cost.amount - 0.10).abs() < f64::EPSILON);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_update_session_usage_without_cost_clears_existing_cost(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, [], cx).await;
+        let connection = Rc::new(FakeAgentConnection::new());
+        let thread = cx
+            .update(|cx| {
+                connection.new_session(project, PathList::new(&[Path::new(path!("/test"))]), cx)
+            })
+            .await
+            .unwrap();
+
+        thread.update(cx, |thread, cx| {
+            thread
+                .handle_session_update(
+                    acp::SessionUpdate::UsageUpdate(
+                        acp::UsageUpdate::new(1000, 10000).cost(acp::Cost::new(0.10, "USD")),
+                    ),
+                    cx,
+                )
+                .unwrap();
+
+            thread.update_session_usage(
+                Some(TokenUsage {
+                    max_tokens: 10_000,
+                    used_tokens: 2_000,
+                    input_tokens: 1_500,
+                    output_tokens: 500,
+                    max_output_tokens: None,
+                }),
+                None,
+                cx,
+            );
+        });
+
+        thread.read_with(cx, |thread, _| {
+            assert_eq!(thread.token_usage().unwrap().used_tokens, 2_000);
+            assert!(thread.cost().is_none());
         });
     }
 
@@ -5472,6 +5638,7 @@ mod tests {
             let cost = thread.cost().expect("cost should be set");
             assert!((cost.amount - 0.05).abs() < f64::EPSILON);
             assert_eq!(cost.currency.as_ref(), "EUR");
+            assert_eq!(cost.source, SessionCostSource::Reported);
         });
     }
 

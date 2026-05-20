@@ -5,12 +5,10 @@ use crate::{
 use agent_client_protocol::schema as acp;
 use std::cell::RefCell;
 
+use crate::message_editor::SharedSessionCapabilities;
 use acp_thread::{ContentBlock, PlanEntry};
 use cloud_api_types::{SubmitAgentThreadFeedbackBody, SubmitAgentThreadFeedbackCommentsBody};
 use editor::actions::OpenExcerpts;
-use feature_flags::AcpBetaFeatureFlag;
-
-use crate::message_editor::SharedSessionCapabilities;
 
 use gpui::List;
 use heapless::Vec as ArrayVec;
@@ -3485,18 +3483,29 @@ impl ThreadView {
         let usage = thread.token_usage()?;
         let show_split = self.supports_split_token_display(cx);
 
-        let cost_label = if cx.has_flag::<AcpBetaFeatureFlag>() {
-            thread.cost().map(|cost| {
-                let precision = if cost.amount > 0.0 && cost.amount < 0.01 {
-                    4
-                } else {
-                    2
-                };
-                format!("{:.prec$} {}", cost.amount, cost.currency, prec = precision)
-            })
-        } else {
-            None
-        };
+        let cost = thread.cost().map(|cost| {
+            let precision = if cost.amount > 0.0 && cost.amount < 0.01 {
+                4
+            } else {
+                2
+            };
+            let label = match cost.source {
+                acp_thread::SessionCostSource::Reported => "Reported cost",
+                acp_thread::SessionCostSource::Estimated => "Estimated cost",
+            };
+            let value = format!("{:.prec$} {}", cost.amount, cost.currency, prec = precision);
+            let description = match cost.source {
+                acp_thread::SessionCostSource::Reported => None,
+                acp_thread::SessionCostSource::Estimated => {
+                    Some("Calculated from token usage and configured model pricing".to_string())
+                }
+            };
+            TokenUsageCostTooltip {
+                label,
+                value,
+                description,
+            }
+        });
 
         let progress_color = |ratio: f32| -> Hsla {
             if ratio >= 0.85 {
@@ -3568,7 +3577,7 @@ impl ThreadView {
                 let output_max_label = output_max_label.clone();
                 let project_entry_ids = project_entry_ids.clone();
                 let workspace = workspace.clone();
-                let cost_label = cost_label.clone();
+                let cost = cost.clone();
                 cx.new(move |_cx| TokenUsageTooltip {
                     percentage,
                     used,
@@ -3578,7 +3587,7 @@ impl ThreadView {
                     input_max: input_max_label,
                     output_max: output_max_label,
                     show_split,
-                    cost_label,
+                    cost,
                     separator_color: tooltip_separator_color,
                     user_rules_count,
                     first_user_rules_id,
@@ -4246,6 +4255,13 @@ impl ThreadView {
     }
 }
 
+#[derive(Clone)]
+struct TokenUsageCostTooltip {
+    label: &'static str,
+    value: String,
+    description: Option<String>,
+}
+
 struct TokenUsageTooltip {
     percentage: String,
     used: String,
@@ -4255,7 +4271,7 @@ struct TokenUsageTooltip {
     input_max: String,
     output_max: String,
     show_split: bool,
-    cost_label: Option<String>,
+    cost: Option<TokenUsageCostTooltip>,
     separator_color: Color,
     user_rules_count: usize,
     first_user_rules_id: Option<uuid::Uuid>,
@@ -4275,7 +4291,7 @@ impl Render for TokenUsageTooltip {
         let input_max = self.input_max.clone();
         let output_max = self.output_max.clone();
         let show_split = self.show_split;
-        let cost_label = self.cost_label.clone();
+        let cost = self.cost.clone();
         let user_rules_count = self.user_rules_count;
         let first_user_rules_id = self.first_user_rules_id;
         let project_rules_count = self.project_rules_count;
@@ -4323,7 +4339,7 @@ impl Render for TokenUsageTooltip {
                             ),
                     )
                 })
-                .when_some(cost_label, |this, cost_label| {
+                .when_some(cost, |this, cost| {
                     this.child(
                         v_flex()
                             .mt_1p5()
@@ -4332,11 +4348,18 @@ impl Render for TokenUsageTooltip {
                             .border_t_1()
                             .border_color(cx.theme().colors().border_variant)
                             .child(
-                                Label::new("Cost")
+                                Label::new(cost.label)
                                     .color(Color::Muted)
                                     .size(LabelSize::Small),
                             )
-                            .child(Label::new(cost_label)),
+                            .child(Label::new(cost.value))
+                            .when_some(cost.description, |this, description| {
+                                this.child(
+                                    Label::new(description)
+                                        .color(Color::Muted)
+                                        .size(LabelSize::Small),
+                                )
+                            }),
                     )
                 })
                 .when(

@@ -1,8 +1,8 @@
 use crate::{
     AuthenticateError, ConfigurationViewTargetAgent, LanguageModel, LanguageModelCompletionError,
-    LanguageModelCompletionEvent, LanguageModelId, LanguageModelName, LanguageModelProvider,
-    LanguageModelProviderId, LanguageModelProviderName, LanguageModelProviderState,
-    LanguageModelRequest, LanguageModelToolChoice,
+    LanguageModelCompletionEvent, LanguageModelCostInfo, LanguageModelId, LanguageModelName,
+    LanguageModelProvider, LanguageModelProviderId, LanguageModelProviderName,
+    LanguageModelProviderState, LanguageModelRequest, LanguageModelToolChoice,
 };
 use anyhow::anyhow;
 use futures::{FutureExt, channel::mpsc, future::BoxFuture, stream::BoxStream, stream::StreamExt};
@@ -126,6 +126,7 @@ pub struct FakeLanguageModel {
     supports_thinking: AtomicBool,
     supports_streaming_tools: AtomicBool,
     supports_images: AtomicBool,
+    cost_info: Mutex<Option<LanguageModelCostInfo>>,
 }
 
 impl Default for FakeLanguageModel {
@@ -140,6 +141,7 @@ impl Default for FakeLanguageModel {
             supports_thinking: AtomicBool::new(false),
             supports_streaming_tools: AtomicBool::new(false),
             supports_images: AtomicBool::new(false),
+            cost_info: Mutex::new(None),
         }
     }
 }
@@ -178,6 +180,10 @@ impl FakeLanguageModel {
 
     pub fn set_supports_images(&self, supports: bool) {
         self.supports_images.store(supports, SeqCst);
+    }
+
+    pub fn set_model_cost_info(&self, cost_info: Option<LanguageModelCostInfo>) {
+        *self.cost_info.lock() = cost_info;
     }
 
     pub fn pending_completions(&self) -> Vec<LanguageModelRequest> {
@@ -275,6 +281,10 @@ impl LanguageModel for FakeLanguageModel {
 
     fn provider_name(&self) -> LanguageModelProviderName {
         self.provider_name.clone()
+    }
+
+    fn model_cost_info(&self) -> Option<LanguageModelCostInfo> {
+        self.cost_info.lock().clone()
     }
 
     fn supports_tools(&self) -> bool {

@@ -19,6 +19,7 @@ use project::agent_server_store::{AgentServerCommand, AgentServerStore};
 use project::{AgentId, Project};
 use remote::remote_client::Interactive;
 use serde::Deserialize;
+use settings::Settings as _;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::rc::Rc;
@@ -32,8 +33,12 @@ use util::process::Child;
 
 use anyhow::{Context as _, Result};
 use gpui::{App, AppContext as _, AsyncApp, Entity, SharedString, Task, WeakEntity};
+use language_model::{LanguageModelCostInfo, TokenUsage};
 
-use acp_thread::{AcpThread, AuthRequired, LoadError, TerminalProviderEvent};
+use acp_thread::{
+    AcpThread, AuthRequired, LoadError, SessionCost, SessionCostSource, SessionTokenUsageMeta,
+    TerminalProviderEvent, session_token_usage_from_meta,
+};
 use terminal::TerminalBuilder;
 use terminal::terminal_settings::{AlternateScroll, CursorShape};
 
@@ -267,6 +272,7 @@ impl<T> FlattenAcpResult<T> for Result<Result<T, acp::Error>, anyhow::Error> {
 struct ClientContext {
     sessions: Rc<RefCell<HashMap<acp::SessionId, AcpSession>>>,
     session_list: Rc<RefCell<Option<Rc<AcpSessionList>>>>,
+    usage_estimators: Rc<RefCell<HashMap<acp::SessionId, AcpSessionUsageEstimator>>>,
 }
 
 fn dispatch_queue_closed_error() -> acp::Error {
@@ -388,6 +394,7 @@ pub struct AcpConnection {
     connection: ConnectionTo<Agent>,
     sessions: Rc<RefCell<HashMap<acp::SessionId, AcpSession>>>,
     pending_sessions: Rc<RefCell<HashMap<acp::SessionId, PendingAcpSession>>>,
+    usage_estimators: Rc<RefCell<HashMap<acp::SessionId, AcpSessionUsageEstimator>>>,
     auth_methods: Vec<acp::AuthMethod>,
     agent_server_store: WeakEntity<AgentServerStore>,
     agent_capabilities: acp::AgentCapabilities,
@@ -412,6 +419,56 @@ struct SessionConfigResponse {
     modes: Option<acp::SessionModeState>,
     models: Option<acp::SessionModelState>,
     config_options: Option<Vec<acp::SessionConfigOption>>,
+}
+
+#[derive(Clone)]
+struct AcpSessionUsageEstimator {
+    current_model_id: Option<acp::ModelId>,
+    model_pricing: HashMap<acp::ModelId, AcpModelCostEstimate>,
+    last_token_usage: Option<SessionTokenUsageMeta>,
+}
+
+#[derive(Clone)]
+struct AcpModelCostEstimate {
+    cost_info: LanguageModelCostInfo,
+    currency: SharedString,
+}
+
+impl AcpSessionUsageEstimator {
+    fn estimate_cost(&self, usage: &SessionTokenUsageMeta) -> Option<SessionCost> {
+        let model_id = self.current_model_id.as_ref()?;
+        let pricing = self.model_pricing.get(model_id)?;
+        let usage = TokenUsage {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_read_input_tokens: usage.cache_read_input_tokens,
+            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+        };
+        if usage.total_tokens() == 0 {
+            return None;
+        }
+
+        Some(SessionCost {
+            amount: pricing.cost_info.estimate_session_cost(&usage)?,
+            currency: pricing.currency.clone(),
+            source: SessionCostSource::Estimated,
+        })
+    }
+
+    fn update_token_usage(&mut self, usage: SessionTokenUsageMeta) -> Option<SessionCost> {
+        self.last_token_usage = Some(usage);
+        self.current_estimated_cost()
+    }
+
+    fn clear_token_usage(&mut self) {
+        self.last_token_usage = None;
+    }
+
+    fn current_estimated_cost(&self) -> Option<SessionCost> {
+        self.last_token_usage
+            .as_ref()
+            .and_then(|usage| self.estimate_cost(usage))
+    }
 }
 
 #[derive(Clone)]
@@ -773,10 +830,13 @@ impl AcpConnection {
             .await
             .context("Failed to receive ACP connection handle")?;
 
+        let usage_estimators = Rc::new(RefCell::new(HashMap::default()));
+
         // Set up the foreground dispatch loop to process work items from handlers.
         let dispatch_context = ClientContext {
             sessions: sessions.clone(),
             session_list: client_session_list.clone(),
+            usage_estimators: usage_estimators.clone(),
         };
         let dispatch_task = cx.spawn({
             let mut dispatch_rx = dispatch_rx;
@@ -888,6 +948,7 @@ impl AcpConnection {
             telemetry_id,
             sessions,
             pending_sessions: Rc::new(RefCell::new(HashMap::default())),
+            usage_estimators,
             agent_capabilities: response.agent_capabilities,
             default_mode,
             default_model,
@@ -910,6 +971,7 @@ impl AcpConnection {
     fn new_for_test(
         connection: ConnectionTo<Agent>,
         sessions: Rc<RefCell<HashMap<acp::SessionId, AcpSession>>>,
+        usage_estimators: Rc<RefCell<HashMap<acp::SessionId, AcpSessionUsageEstimator>>>,
         agent_capabilities: acp::AgentCapabilities,
         agent_server_store: WeakEntity<AgentServerStore>,
         io_task: Task<()>,
@@ -922,6 +984,7 @@ impl AcpConnection {
             connection,
             sessions,
             pending_sessions: Rc::new(RefCell::new(HashMap::default())),
+            usage_estimators,
             auth_methods: vec![],
             agent_server_store,
             agent_capabilities,
@@ -1001,6 +1064,11 @@ impl AcpConnection {
                         )
                     });
 
+                    let usage_estimator = cx.update(|cx| this.new_usage_estimator(cx));
+                    this.usage_estimators
+                        .borrow_mut()
+                        .insert(session_id.clone(), usage_estimator);
+
                     // Register the session before awaiting the RPC so that any
                     // `session/update` notifications that arrive during the call
                     // (e.g. history replay during `session/load`) can find the thread.
@@ -1023,12 +1091,19 @@ impl AcpConnection {
                             Err(err) => {
                                 this.sessions.borrow_mut().remove(&session_id);
                                 this.pending_sessions.borrow_mut().remove(&session_id);
+                                this.usage_estimators.borrow_mut().remove(&session_id);
                                 return Err(Arc::new(err));
                             }
                         };
 
                     let (modes, models, config_options) =
                         config_state(response.modes, response.models, response.config_options);
+
+                    if let Some(estimator) = this.usage_estimators.borrow_mut().get_mut(&session_id)
+                    {
+                        estimator.update_from_models(models.as_ref());
+                        estimator.update_from_config_options(config_options.as_ref());
+                    }
 
                     if let Some(config_opts) = config_options.as_ref() {
                         this.apply_default_config_options(&session_id, config_opts, cx);
@@ -1048,6 +1123,7 @@ impl AcpConnection {
                     {
                         let mut sessions = this.sessions.borrow_mut();
                         let Some(session) = sessions.get_mut(&session_id) else {
+                            this.usage_estimators.borrow_mut().remove(&session_id);
                             return Err(Arc::new(anyhow!(
                                 "session was closed before load completed"
                             )));
@@ -1284,6 +1360,13 @@ impl AgentConnection for AcpConnection {
             let (modes, models, config_options) =
                 config_state(response.modes, response.models, response.config_options);
 
+            let mut usage_estimator = cx.update(|cx| self.new_usage_estimator(cx));
+            usage_estimator.update_from_models(models.as_ref());
+            usage_estimator.update_from_config_options(config_options.as_ref());
+            self.usage_estimators
+                .borrow_mut()
+                .insert(response.session_id.clone(), usage_estimator);
+
             if let Some(default_mode) = self.default_mode.clone() {
                 if let Some(modes) = modes.as_ref() {
                     let mut modes_ref = modes.borrow_mut();
@@ -1366,7 +1449,14 @@ impl AgentConnection for AcpConnection {
                         })
                         .detach();
 
-                        models_ref.current_model_id = default_model;
+                        models_ref.current_model_id = default_model.clone();
+                        if let Some(estimator) = self
+                            .usage_estimators
+                            .borrow_mut()
+                            .get_mut(&response.session_id)
+                        {
+                            estimator.current_model_id = Some(default_model);
+                        }
                     } else {
                         let available_models = models_ref
                             .available_models
@@ -1551,6 +1641,7 @@ impl AgentConnection for AcpConnection {
             Some(0) => {
                 self.pending_sessions.borrow_mut().remove(session_id);
                 self.sessions.borrow_mut().remove(session_id);
+                self.usage_estimators.borrow_mut().remove(session_id);
 
                 let conn = self.connection.clone();
                 let session_id = session_id.clone();
@@ -1578,6 +1669,7 @@ impl AgentConnection for AcpConnection {
 
         sessions.remove(session_id);
         drop(sessions);
+        self.usage_estimators.borrow_mut().remove(session_id);
 
         let conn = self.connection.clone();
         let session_id = session_id.clone();
@@ -1586,7 +1678,7 @@ impl AgentConnection for AcpConnection {
                 conn.send_request(acp::CloseSessionRequest::new(session_id.clone())),
             )
             .await?;
-            Ok(())
+            anyhow::Ok(())
         })
     }
 
@@ -1746,6 +1838,7 @@ impl AgentConnection for AcpConnection {
                 session_id.clone(),
                 self.connection.clone(),
                 models.clone(),
+                self.usage_estimators.clone(),
             )) as _)
         } else {
             None
@@ -1768,6 +1861,7 @@ impl AgentConnection for AcpConnection {
             state: config_opts.config_options.clone(),
             watch_tx: config_opts.tx.clone(),
             watch_rx: config_opts.rx.clone(),
+            usage_estimators: self.usage_estimators.clone(),
         }) as _)
     }
 
@@ -2178,9 +2272,11 @@ pub mod test_support {
 
         let agent_capabilities = response.agent_capabilities;
 
+        let usage_estimators = Rc::new(RefCell::new(HashMap::default()));
         let dispatch_context = ClientContext {
             sessions: sessions.clone(),
             session_list: client_session_list.clone(),
+            usage_estimators: usage_estimators.clone(),
         };
         let dispatch_task = cx.spawn({
             let mut dispatch_rx = dispatch_rx;
@@ -2198,6 +2294,7 @@ pub mod test_support {
             AcpConnection::new_for_test(
                 client_conn,
                 sessions,
+                usage_estimators,
                 agent_capabilities,
                 agent_server_store,
                 client_io_task,
@@ -2245,6 +2342,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
+    use gpui::UpdateGlobal as _;
 
     #[test]
     fn terminal_auth_task_builds_spawn_from_prebuilt_command() {
@@ -2530,9 +2628,11 @@ mod tests {
 
         let agent_capabilities = response.agent_capabilities;
 
+        let usage_estimators = Rc::new(RefCell::new(HashMap::default()));
         let dispatch_context = ClientContext {
             sessions: sessions.clone(),
             session_list: client_session_list.clone(),
+            usage_estimators: usage_estimators.clone(),
         };
         // `TestAppContext::spawn` hands out an `AsyncApp` by value, whereas the
         // production path uses `Context::spawn` which hands out `&mut AsyncApp`.
@@ -2555,6 +2655,7 @@ mod tests {
             AcpConnection::new_for_test(
                 client_conn,
                 sessions,
+                usage_estimators,
                 agent_capabilities,
                 agent_server_store,
                 client_io_task,
@@ -2935,6 +3036,370 @@ mod tests {
             "session should be removed after final close"
         );
     }
+
+    #[gpui::test]
+    async fn test_usage_update_with_private_meta_sets_estimated_cost(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (
+            connection,
+            project,
+            _load_count,
+            _close_count,
+            load_session_updates,
+            _load_session_gate,
+            _keep_agent_alive,
+        ) = connect_fake_agent(cx).await;
+
+        cx.update(|cx| {
+            settings::SettingsStore::update_global(cx, |store, cx| {
+                store
+                    .set_user_settings(
+                        r#"{
+                            "agent": {
+                                "model_cost_overrides": {
+                                    "codex-mini": {
+                                        "input_token_cost_per_1m": 3.0,
+                                        "output_token_cost_per_1m": 12.0
+                                    }
+                                }
+                            }
+                        }"#,
+                        cx,
+                    )
+                    .unwrap();
+            });
+        });
+
+        *load_session_updates
+            .lock()
+            .expect("load_session_updates mutex poisoned") = vec![
+            acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(vec![
+                acp::SessionConfigOption::select(
+                    "model",
+                    "Model",
+                    "codex-mini",
+                    vec![acp::SessionConfigSelectOption::new(
+                        "codex-mini",
+                        "Codex Mini",
+                    )],
+                )
+                .category(acp::SessionConfigOptionCategory::Model),
+            ])),
+            acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(1_500, 10_000).meta(
+                acp_thread::meta_with_session_token_usage(acp_thread::SessionTokenUsageMeta {
+                    input_tokens: 1_000,
+                    output_tokens: 500,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                }),
+            )),
+        ];
+
+        let session_id = acp::SessionId::new("estimated-cost");
+        let work_dirs = util::path_list::PathList::new(&[std::path::Path::new("/a")]);
+        let thread = cx
+            .update(|cx| {
+                connection.clone().load_session(
+                    session_id.clone(),
+                    project.clone(),
+                    work_dirs,
+                    None,
+                    cx,
+                )
+            })
+            .await
+            .expect("load_session failed");
+        cx.run_until_parked();
+
+        thread.read_with(cx, |thread, _| {
+            let usage = thread.token_usage().expect("token usage should be set");
+            assert_eq!(usage.input_tokens, 1_000);
+            assert_eq!(usage.output_tokens, 500);
+
+            let cost = thread.cost().expect("estimated cost should be set");
+            assert!((cost.amount - 0.009).abs() < f64::EPSILON);
+            assert_eq!(cost.currency.as_ref(), "USD");
+            assert_eq!(cost.source, SessionCostSource::Estimated);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_reported_usage_cost_is_not_overwritten_by_estimate(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (
+            connection,
+            project,
+            _load_count,
+            _close_count,
+            load_session_updates,
+            _load_session_gate,
+            _keep_agent_alive,
+        ) = connect_fake_agent(cx).await;
+
+        cx.update(|cx| {
+            settings::SettingsStore::update_global(cx, |store, cx| {
+                store
+                    .set_user_settings(
+                        r#"{
+                            "agent": {
+                                "model_cost_overrides": {
+                                    "codex-mini": {
+                                        "input_token_cost_per_1m": 3.0,
+                                        "output_token_cost_per_1m": 12.0
+                                    }
+                                }
+                            }
+                        }"#,
+                        cx,
+                    )
+                    .unwrap();
+            });
+        });
+
+        *load_session_updates
+            .lock()
+            .expect("load_session_updates mutex poisoned") = vec![
+            acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(vec![
+                acp::SessionConfigOption::select(
+                    "model",
+                    "Model",
+                    "codex-mini",
+                    vec![acp::SessionConfigSelectOption::new(
+                        "codex-mini",
+                        "Codex Mini",
+                    )],
+                )
+                .category(acp::SessionConfigOptionCategory::Model),
+            ])),
+            acp::SessionUpdate::UsageUpdate(
+                acp::UsageUpdate::new(1_500, 10_000)
+                    .meta(acp_thread::meta_with_session_token_usage(
+                        acp_thread::SessionTokenUsageMeta {
+                            input_tokens: 1_000,
+                            output_tokens: 500,
+                            cache_read_input_tokens: 0,
+                            cache_creation_input_tokens: 0,
+                        },
+                    ))
+                    .cost(acp::Cost::new(0.42, "USD")),
+            ),
+        ];
+
+        let session_id = acp::SessionId::new("reported-cost");
+        let work_dirs = util::path_list::PathList::new(&[std::path::Path::new("/a")]);
+        let thread = cx
+            .update(|cx| {
+                connection.clone().load_session(
+                    session_id.clone(),
+                    project.clone(),
+                    work_dirs,
+                    None,
+                    cx,
+                )
+            })
+            .await
+            .expect("load_session failed");
+        cx.run_until_parked();
+
+        thread.read_with(cx, |thread, _| {
+            let cost = thread.cost().expect("reported cost should be set");
+            assert!((cost.amount - 0.42).abs() < f64::EPSILON);
+            assert_eq!(cost.currency.as_ref(), "USD");
+            assert_eq!(cost.source, SessionCostSource::Reported);
+        });
+    }
+
+    #[gpui::test]
+    async fn test_config_option_update_clears_stale_estimated_cost(cx: &mut gpui::TestAppContext) {
+        let (
+            connection,
+            project,
+            _load_count,
+            _close_count,
+            load_session_updates,
+            _load_session_gate,
+            _keep_agent_alive,
+        ) = connect_fake_agent(cx).await;
+
+        cx.update(|cx| {
+            settings::SettingsStore::update_global(cx, |store, cx| {
+                store
+                    .set_user_settings(
+                        r#"{
+                            "agent": {
+                                "model_cost_overrides": {
+                                    "codex-mini": {
+                                        "input_token_cost_per_1m": 3.0,
+                                        "output_token_cost_per_1m": 12.0
+                                    }
+                                }
+                            }
+                        }"#,
+                        cx,
+                    )
+                    .unwrap();
+            });
+        });
+
+        *load_session_updates
+            .lock()
+            .expect("load_session_updates mutex poisoned") = vec![
+            acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(vec![
+                acp::SessionConfigOption::select(
+                    "model",
+                    "Model",
+                    "codex-mini",
+                    vec![acp::SessionConfigSelectOption::new(
+                        "codex-mini",
+                        "Codex Mini",
+                    )],
+                )
+                .category(acp::SessionConfigOptionCategory::Model),
+            ])),
+            acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(1_500, 10_000).meta(
+                acp_thread::meta_with_session_token_usage(acp_thread::SessionTokenUsageMeta {
+                    input_tokens: 1_000,
+                    output_tokens: 500,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                }),
+            )),
+            acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(vec![
+                acp::SessionConfigOption::select(
+                    "model",
+                    "Model",
+                    "unknown-model",
+                    vec![acp::SessionConfigSelectOption::new(
+                        "unknown-model",
+                        "Unknown Model",
+                    )],
+                )
+                .category(acp::SessionConfigOptionCategory::Model),
+            ])),
+        ];
+
+        let session_id = acp::SessionId::new("estimated-cost-cleared");
+        let work_dirs = util::path_list::PathList::new(&[std::path::Path::new("/a")]);
+        let thread = cx
+            .update(|cx| {
+                connection.clone().load_session(
+                    session_id.clone(),
+                    project.clone(),
+                    work_dirs,
+                    None,
+                    cx,
+                )
+            })
+            .await
+            .expect("load_session failed");
+        cx.run_until_parked();
+
+        thread.read_with(cx, |thread, _| {
+            assert!(thread.token_usage().is_some());
+            assert!(
+                thread.cost().is_none(),
+                "estimated cost should be cleared when the selected model changes"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_config_option_update_recomputes_estimated_cost(cx: &mut gpui::TestAppContext) {
+        let (
+            connection,
+            project,
+            _load_count,
+            _close_count,
+            load_session_updates,
+            _load_session_gate,
+            _keep_agent_alive,
+        ) = connect_fake_agent(cx).await;
+
+        cx.update(|cx| {
+            settings::SettingsStore::update_global(cx, |store, cx| {
+                store
+                    .set_user_settings(
+                        r#"{
+                            "agent": {
+                                "model_cost_overrides": {
+                                    "codex-mini": {
+                                        "input_token_cost_per_1m": 3.0,
+                                        "output_token_cost_per_1m": 12.0
+                                    },
+                                    "codex-pro": {
+                                        "input_token_cost_per_1m": 6.0,
+                                        "output_token_cost_per_1m": 24.0
+                                    }
+                                }
+                            }
+                        }"#,
+                        cx,
+                    )
+                    .unwrap();
+            });
+        });
+
+        *load_session_updates
+            .lock()
+            .expect("load_session_updates mutex poisoned") = vec![
+            acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(vec![
+                acp::SessionConfigOption::select(
+                    "model",
+                    "Model",
+                    "codex-mini",
+                    vec![
+                        acp::SessionConfigSelectOption::new("codex-mini", "Codex Mini"),
+                        acp::SessionConfigSelectOption::new("codex-pro", "Codex Pro"),
+                    ],
+                )
+                .category(acp::SessionConfigOptionCategory::Model),
+            ])),
+            acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(1_500, 10_000).meta(
+                acp_thread::meta_with_session_token_usage(acp_thread::SessionTokenUsageMeta {
+                    input_tokens: 1_000,
+                    output_tokens: 500,
+                    cache_read_input_tokens: 0,
+                    cache_creation_input_tokens: 0,
+                }),
+            )),
+            acp::SessionUpdate::ConfigOptionUpdate(acp::ConfigOptionUpdate::new(vec![
+                acp::SessionConfigOption::select(
+                    "model",
+                    "Model",
+                    "codex-pro",
+                    vec![
+                        acp::SessionConfigSelectOption::new("codex-mini", "Codex Mini"),
+                        acp::SessionConfigSelectOption::new("codex-pro", "Codex Pro"),
+                    ],
+                )
+                .category(acp::SessionConfigOptionCategory::Model),
+            ])),
+        ];
+
+        let session_id = acp::SessionId::new("estimated-cost-recomputed");
+        let work_dirs = util::path_list::PathList::new(&[std::path::Path::new("/a")]);
+        let thread = cx
+            .update(|cx| {
+                connection.clone().load_session(
+                    session_id.clone(),
+                    project.clone(),
+                    work_dirs,
+                    None,
+                    cx,
+                )
+            })
+            .await
+            .expect("load_session failed");
+        cx.run_until_parked();
+
+        thread.read_with(cx, |thread, _| {
+            let cost = thread.cost().expect("estimated cost should be set");
+            assert!((cost.amount - 0.018).abs() < f64::EPSILON);
+            assert_eq!(cost.source, SessionCostSource::Estimated);
+        });
+    }
 }
 
 fn mcp_servers_for_project(project: &Entity<Project>, cx: &App) -> Vec<acp::McpServer> {
@@ -2982,6 +3447,110 @@ fn mcp_servers_for_project(project: &Entity<Project>, cx: &App) -> Vec<acp::McpS
             }
         })
         .collect()
+}
+
+impl AcpConnection {
+    fn new_usage_estimator(&self, cx: &App) -> AcpSessionUsageEstimator {
+        let settings = agent_settings::AgentSettings::get_global(cx);
+        let model_pricing = settings
+            .model_cost_overrides
+            .iter()
+            .map(|(model_id, pricing)| {
+                (
+                    acp::ModelId::new(model_id.to_string()),
+                    AcpModelCostEstimate {
+                        cost_info: pricing.cost_info.clone(),
+                        currency: pricing.currency.clone(),
+                    },
+                )
+            })
+            .collect();
+
+        AcpSessionUsageEstimator {
+            current_model_id: None,
+            model_pricing,
+            last_token_usage: None,
+        }
+    }
+}
+
+impl AcpSessionUsageEstimator {
+    fn update_from_models(&mut self, models: Option<&Rc<RefCell<acp::SessionModelState>>>) {
+        if let Some(models) = models {
+            self.current_model_id = Some(models.borrow().current_model_id.clone());
+        }
+    }
+
+    fn update_from_config_options(
+        &mut self,
+        config_options: Option<&Rc<RefCell<Vec<acp::SessionConfigOption>>>>,
+    ) {
+        if let Some(config_options) = config_options {
+            self.update_from_config_options_value(&config_options.borrow());
+        }
+    }
+
+    fn update_from_config_options_value(&mut self, config_options: &[acp::SessionConfigOption]) {
+        if let Some(current_model_id) = config_options
+            .iter()
+            .find_map(current_model_id_from_config_option)
+        {
+            self.current_model_id = Some(current_model_id);
+        }
+    }
+}
+
+fn current_model_id_from_config_option(option: &acp::SessionConfigOption) -> Option<acp::ModelId> {
+    let is_model = option
+        .category
+        .as_ref()
+        .is_some_and(|category| matches!(category, acp::SessionConfigOptionCategory::Model));
+    if !is_model {
+        return None;
+    }
+
+    let acp::SessionConfigKind::Select(select) = &option.kind else {
+        return None;
+    };
+    Some(acp::ModelId::new(select.current_value.to_string()))
+}
+
+enum EstimatedUsageCostUpdate {
+    Unchanged,
+    Set(SessionCost),
+    ClearEstimated,
+}
+
+fn estimated_usage_cost_for_update(
+    usage_estimators: &Rc<RefCell<HashMap<acp::SessionId, AcpSessionUsageEstimator>>>,
+    session_id: &acp::SessionId,
+    update: &acp::SessionUpdate,
+) -> EstimatedUsageCostUpdate {
+    match update {
+        acp::SessionUpdate::UsageUpdate(update) if update.cost.is_none() => {
+            let mut usage_estimators = usage_estimators.borrow_mut();
+            let Some(estimator) = usage_estimators.get_mut(session_id) else {
+                return EstimatedUsageCostUpdate::ClearEstimated;
+            };
+            let Some(token_usage) = session_token_usage_from_meta(&update.meta) else {
+                estimator.clear_token_usage();
+                return EstimatedUsageCostUpdate::ClearEstimated;
+            };
+            estimator
+                .update_token_usage(token_usage)
+                .map(EstimatedUsageCostUpdate::Set)
+                .unwrap_or(EstimatedUsageCostUpdate::ClearEstimated)
+        }
+        acp::SessionUpdate::ConfigOptionUpdate(_) | acp::SessionUpdate::CurrentModeUpdate(_) => {
+            usage_estimators
+                .borrow()
+                .get(session_id)
+                .and_then(|estimator| estimator.current_estimated_cost())
+                .map(EstimatedUsageCostUpdate::Set)
+                .unwrap_or(EstimatedUsageCostUpdate::ClearEstimated)
+        }
+        _ => EstimatedUsageCostUpdate::Unchanged,
+    }
 }
 
 fn config_state(
@@ -3048,6 +3617,7 @@ struct AcpModelSelector {
     session_id: acp::SessionId,
     connection: ConnectionTo<Agent>,
     state: Rc<RefCell<acp::SessionModelState>>,
+    usage_estimators: Rc<RefCell<HashMap<acp::SessionId, AcpSessionUsageEstimator>>>,
 }
 
 impl AcpModelSelector {
@@ -3055,11 +3625,13 @@ impl AcpModelSelector {
         session_id: acp::SessionId,
         connection: ConnectionTo<Agent>,
         state: Rc<RefCell<acp::SessionModelState>>,
+        usage_estimators: Rc<RefCell<HashMap<acp::SessionId, AcpSessionUsageEstimator>>>,
     ) -> Self {
         Self {
             session_id,
             connection,
             state,
+            usage_estimators,
         }
     }
 }
@@ -3086,7 +3658,13 @@ impl acp_thread::AgentModelSelector for AcpModelSelector {
             old_model_id = state.current_model_id.clone();
             state.current_model_id = model_id.clone();
         };
+        if let Some(estimator) = self.usage_estimators.borrow_mut().get_mut(&self.session_id) {
+            estimator.current_model_id = Some(model_id.clone());
+        }
         let state = self.state.clone();
+        let usage_estimators = self.usage_estimators.clone();
+        let session_id_for_revert = self.session_id.clone();
+        let old_model_id_for_revert = old_model_id.clone();
         cx.foreground_executor().spawn(async move {
             let result = into_foreground_future(
                 connection.send_request(acp::SetSessionModelRequest::new(session_id, model_id)),
@@ -3095,6 +3673,12 @@ impl acp_thread::AgentModelSelector for AcpModelSelector {
 
             if result.is_err() {
                 state.borrow_mut().current_model_id = old_model_id;
+                if let Some(estimator) = usage_estimators
+                    .borrow_mut()
+                    .get_mut(&session_id_for_revert)
+                {
+                    estimator.current_model_id = Some(old_model_id_for_revert);
+                }
             }
 
             result?;
@@ -3123,6 +3707,7 @@ struct AcpSessionConfigOptions {
     state: Rc<RefCell<Vec<acp::SessionConfigOption>>>,
     watch_tx: Rc<RefCell<watch::Sender<()>>>,
     watch_rx: watch::Receiver<()>,
+    usage_estimators: Rc<RefCell<HashMap<acp::SessionId, AcpSessionUsageEstimator>>>,
 }
 
 impl acp_thread::AgentSessionConfigOptions for AcpSessionConfigOptions {
@@ -3138,7 +3723,9 @@ impl acp_thread::AgentSessionConfigOptions for AcpSessionConfigOptions {
     ) -> Task<Result<Vec<acp::SessionConfigOption>>> {
         let connection = self.connection.clone();
         let session_id = self.session_id.clone();
+        let session_id_for_estimator = session_id.clone();
         let state = self.state.clone();
+        let usage_estimators = self.usage_estimators.clone();
 
         let watch_tx = self.watch_tx.clone();
 
@@ -3149,6 +3736,12 @@ impl acp_thread::AgentSessionConfigOptions for AcpSessionConfigOptions {
             .await?;
 
             *state.borrow_mut() = response.config_options.clone();
+            if let Some(estimator) = usage_estimators
+                .borrow_mut()
+                .get_mut(&session_id_for_estimator)
+            {
+                estimator.update_from_config_options_value(&response.config_options);
+            }
             watch_tx.borrow_mut().send(()).ok();
             Ok(response.config_options)
         })
@@ -3333,6 +3926,13 @@ fn handle_session_notification(
         config_options, ..
     }) = &notification.update
     {
+        if let Some(estimator) = ctx
+            .usage_estimators
+            .borrow_mut()
+            .get_mut(&notification.session_id)
+        {
+            estimator.update_from_config_options_value(config_options);
+        }
         if let Some((config_opts_cell, tx_cell)) = &config_opts_data {
             *config_opts_cell.borrow_mut() = config_options.clone();
             tx_cell.borrow_mut().send(()).ok();
@@ -3384,10 +3984,31 @@ fn handle_session_notification(
         }
     }
 
+    let estimated_usage_cost = estimated_usage_cost_for_update(
+        &ctx.usage_estimators,
+        &notification.session_id,
+        &notification.update,
+    );
+
     // Forward the update to the acp_thread as usual.
     if let Err(err) = thread
         .update(cx, |thread, cx| {
-            thread.handle_session_update(notification.update.clone(), cx)
+            thread.handle_session_update(notification.update.clone(), cx)?;
+            match estimated_usage_cost {
+                EstimatedUsageCostUpdate::Set(cost) => {
+                    let has_reported_cost = thread
+                        .cost()
+                        .is_some_and(|cost| cost.source == SessionCostSource::Reported);
+                    if !has_reported_cost && let Some(usage) = thread.token_usage().cloned() {
+                        thread.update_session_usage(Some(usage), Some(cost), cx);
+                    }
+                }
+                EstimatedUsageCostUpdate::ClearEstimated => {
+                    thread.clear_estimated_cost(cx);
+                }
+                EstimatedUsageCostUpdate::Unchanged => {}
+            }
+            anyhow::Ok(())
         })
         .flatten_acp()
     {

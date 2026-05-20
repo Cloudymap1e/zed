@@ -344,7 +344,7 @@ impl NativeAgent {
         let title = thread.title();
         let draft_prompt = thread.draft_prompt().map(Vec::from);
         let scroll_position = thread.ui_scroll_position();
-        let token_usage = thread.latest_token_usage();
+        let session_usage = thread.latest_session_usage(cx);
         let project = thread.project.clone();
         let action_log = thread.action_log.clone();
         let prompt_capabilities_rx = thread.prompt_capabilities_rx.clone();
@@ -362,7 +362,7 @@ impl NativeAgent {
             );
             acp_thread.set_draft_prompt(draft_prompt, cx);
             acp_thread.set_ui_scroll_position(scroll_position);
-            acp_thread.update_token_usage(token_usage, cx);
+            acp_thread.update_session_usage(session_usage.token_usage, session_usage.cost, cx);
             acp_thread
         });
 
@@ -704,7 +704,7 @@ impl NativeAgent {
             return;
         };
         session.acp_thread.update(cx, |acp_thread, cx| {
-            acp_thread.update_token_usage(usage.0.clone(), cx);
+            acp_thread.update_session_usage(usage.0.token_usage.clone(), usage.0.cost.clone(), cx);
         });
     }
 
@@ -1826,12 +1826,12 @@ impl acp_thread::AgentSessionTruncate for NativeAgentSessionTruncate {
     fn run(&self, message_id: acp_thread::UserMessageId, cx: &mut App) -> Task<Result<()>> {
         match self.thread.update(cx, |thread, cx| {
             thread.truncate(message_id.clone(), cx)?;
-            Ok(thread.latest_token_usage())
+            Ok(thread.latest_session_usage(cx))
         }) {
             Ok(usage) => {
                 self.acp_thread
                     .update(cx, |thread, cx| {
-                        thread.update_token_usage(usage, cx);
+                        thread.update_session_usage(usage.token_usage, usage.cost, cx);
                     })
                     .ok();
                 Task::ready(Ok(()))
@@ -2087,7 +2087,7 @@ impl SubagentHandle for NativeSubagentHandle {
                 let subscription = cx.subscribe(
                     &thread,
                     move |_thread, event: &TokenUsageUpdated, _cx| {
-                        if let Some(usage) = &event.0 {
+                        if let Some(usage) = &event.0.token_usage {
                             let old_ratio = ratio_before_prompt
                                 .clone()
                                 .unwrap_or(TokenUsageRatio::Normal);

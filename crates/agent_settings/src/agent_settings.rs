@@ -7,8 +7,8 @@ use agent_client_protocol::schema as acp;
 use collections::{HashSet, IndexMap};
 use fs::Fs;
 use futures::channel::oneshot;
-use gpui::{App, Pixels, px};
-use language_model::LanguageModel;
+use gpui::{App, Pixels, SharedString, px};
+use language_model::{LanguageModel, LanguageModelCostInfo};
 use project::DisableAiSettings;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -157,6 +157,7 @@ pub struct AgentSettings {
     pub play_sound_when_agent_done: PlaySoundWhenAgentDone,
     pub single_file_review: bool,
     pub model_parameters: Vec<LanguageModelParameters>,
+    pub model_cost_overrides: IndexMap<Arc<str>, AgentModelCostOverride>,
     pub enable_feedback: bool,
     pub expand_edit_card: bool,
     pub expand_terminal_card: bool,
@@ -168,6 +169,12 @@ pub struct AgentSettings {
     pub show_merge_conflict_indicator: bool,
     pub tool_permissions: ToolPermissions,
     pub new_thread_location: NewThreadLocation,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentModelCostOverride {
+    pub cost_info: LanguageModelCostInfo,
+    pub currency: SharedString,
 }
 
 impl AgentSettings {
@@ -661,6 +668,24 @@ impl Settings for AgentSettings {
             play_sound_when_agent_done: agent.play_sound_when_agent_done.unwrap_or_default(),
             single_file_review: agent.single_file_review.unwrap(),
             model_parameters: agent.model_parameters,
+            model_cost_overrides: agent
+                .model_cost_overrides
+                .into_iter()
+                .filter_map(|(model_id, cost)| {
+                    let input_token_cost_per_1m = cost.input_token_cost_per_1m?;
+                    let output_token_cost_per_1m = cost.output_token_cost_per_1m?;
+                    Some((
+                        model_id,
+                        AgentModelCostOverride {
+                            cost_info: LanguageModelCostInfo::TokenCost {
+                                input_token_cost_per_1m,
+                                output_token_cost_per_1m,
+                            },
+                            currency: cost.currency.unwrap_or_else(|| Arc::from("USD")).into(),
+                        },
+                    ))
+                })
+                .collect(),
             enable_feedback: agent.enable_feedback.unwrap(),
             expand_edit_card: agent.expand_edit_card.unwrap(),
             expand_terminal_card: agent.expand_terminal_card.unwrap(),
@@ -1249,6 +1274,51 @@ mod tests {
         let content: ToolPermissionsContent = serde_json::from_value(json_deny).unwrap();
         let permissions = compile_tool_permissions(Some(content));
         assert_eq!(permissions.default, ToolPermissionMode::Deny);
+    }
+
+    #[gpui::test]
+    fn test_model_cost_overrides_require_complete_token_pricing(cx: &mut gpui::App) {
+        let store = SettingsStore::test(cx);
+        cx.set_global(store);
+        project::DisableAiSettings::register(cx);
+        AgentSettings::register(cx);
+
+        SettingsStore::update_global(cx, |store, cx| {
+            store
+                .set_user_settings(
+                    r#"{
+                        "agent": {
+                            "model_cost_overrides": {
+                                "codex-mini": {
+                                    "input_token_cost_per_1m": 3.0,
+                                    "output_token_cost_per_1m": 12.0,
+                                    "currency": "EUR"
+                                },
+                                "incomplete": {
+                                    "input_token_cost_per_1m": 1.0
+                                }
+                            }
+                        }
+                    }"#,
+                    cx,
+                )
+                .unwrap();
+        });
+
+        let settings = AgentSettings::get_global(cx);
+        assert_eq!(settings.model_cost_overrides.len(), 1);
+        let override_cost = settings
+            .model_cost_overrides
+            .get("codex-mini")
+            .expect("complete override should be compiled");
+        assert_eq!(override_cost.currency.as_ref(), "EUR");
+        assert_eq!(
+            override_cost.cost_info,
+            LanguageModelCostInfo::TokenCost {
+                input_token_cost_per_1m: 3.0,
+                output_token_cost_per_1m: 12.0,
+            }
+        );
     }
 
     #[gpui::test]

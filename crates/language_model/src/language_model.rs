@@ -321,7 +321,7 @@ pub trait LanguageModelProviderState: 'static {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LanguageModelCostInfo {
-    /// Cost per 1,000 input and output tokens
+    /// Cost per million input and output tokens
     TokenCost {
         input_token_cost_per_1m: f64,
         output_token_cost_per_1m: f64,
@@ -331,6 +331,24 @@ pub enum LanguageModelCostInfo {
 }
 
 impl LanguageModelCostInfo {
+    pub fn estimate_session_cost(&self, usage: &TokenUsage) -> Option<f64> {
+        match self {
+            LanguageModelCostInfo::TokenCost {
+                input_token_cost_per_1m,
+                output_token_cost_per_1m,
+            } => Some(
+                usage
+                    .input_tokens
+                    .saturating_add(usage.cache_creation_input_tokens)
+                    .saturating_add(usage.cache_read_input_tokens) as f64
+                    * input_token_cost_per_1m
+                    / 1_000_000.
+                    + usage.output_tokens as f64 * output_token_cost_per_1m / 1_000_000.,
+            ),
+            LanguageModelCostInfo::RequestCost { .. } => None,
+        }
+    }
+
     pub fn to_shared_string(&self) -> SharedString {
         match self {
             LanguageModelCostInfo::RequestCost { cost_per_request } => {

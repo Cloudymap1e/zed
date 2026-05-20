@@ -188,6 +188,14 @@ pub struct AgentSettingsContent {
     /// Default: []
     #[serde(default)]
     pub model_parameters: Vec<LanguageModelParameters>,
+    /// Per-model pricing overrides used to estimate agent session cost.
+    /// Keys are model IDs as shown by ACP agents, or `provider/model` for native Zed models.
+    /// Prices are per million tokens in the configured currency.
+    /// These values are estimates and are not provider-reported billing.
+    ///
+    /// Default: {}
+    #[serde(default)]
+    pub model_cost_overrides: HashMap<Arc<str>, AgentModelCostContent>,
     /// Whether to show thumb buttons for feedback in the agent panel.
     ///
     /// Default: true
@@ -435,6 +443,14 @@ pub struct LanguageModelParameters {
     pub model: Option<String>,
     #[serde(serialize_with = "crate::serialize_optional_f32_with_two_decimal_places")]
     pub temperature: Option<f32>,
+}
+
+#[with_fallible_options]
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, MergeFrom, PartialEq)]
+pub struct AgentModelCostContent {
+    pub input_token_cost_per_1m: Option<f64>,
+    pub output_token_cost_per_1m: Option<f64>,
+    pub currency: Option<Arc<str>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, MergeFrom)]

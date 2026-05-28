@@ -14,6 +14,7 @@ use http_client::HttpClient;
 use language::{LanguageConfig, LanguageName, LanguageQueries, LoadedLanguage};
 use lsp::LanguageServerName;
 use node_runtime::NodeRuntime;
+use util::ResultExt as _;
 
 use crate::wasm_host::{WasmExtension, WasmHost};
 
@@ -248,7 +249,9 @@ impl HeadlessExtensionStore {
                     ));
                 }
             });
-            let _ = join_all(removal_tasks).await;
+            for result in join_all(removal_tasks).await {
+                result.log_err();
+            }
 
             fs.remove_dir(
                 &path,

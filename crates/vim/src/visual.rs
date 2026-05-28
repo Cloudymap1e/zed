@@ -227,9 +227,15 @@ impl Vim {
                     }
                 )
             {
-                let is_up_or_down = matches!(motion, Motion::Up { .. } | Motion::Down { .. });
+                let (is_up_or_down, skip_soft_wrapped_rows) = match motion {
+                    Motion::Up { display_lines } | Motion::Down { display_lines } => {
+                        (true, !display_lines)
+                    }
+                    _ => (false, true),
+                };
                 vim.visual_block_motion(
                     is_up_or_down,
+                    skip_soft_wrapped_rows,
                     editor,
                     window,
                     cx,
@@ -299,6 +305,7 @@ impl Vim {
     pub fn visual_block_motion(
         &mut self,
         preserve_goal: bool,
+        skip_soft_wrapped_rows: bool,
         editor: &mut Editor,
         window: &mut Window,
         cx: &mut Context<Editor>,
@@ -414,11 +421,18 @@ impl Vim {
                     break;
                 }
 
-                // Find the next or previous buffer row where the `row` should
-                // be moved to, so that wrapped lines are skipped.
-                row = map
-                    .start_of_relative_buffer_row(DisplayPoint::new(row, 0), direction)
-                    .row();
+                let next_row = if skip_soft_wrapped_rows {
+                    map.start_of_relative_buffer_row(DisplayPoint::new(row, 0), direction)
+                        .row()
+                } else if going_up {
+                    row - 1
+                } else {
+                    row + 1
+                };
+                if next_row == row {
+                    break;
+                }
+                row = next_row;
             }
 
             s.select(selections);

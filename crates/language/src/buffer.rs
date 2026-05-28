@@ -5156,6 +5156,7 @@ impl BufferSnapshot {
         &self,
         offset_range: Range<usize>,
     ) -> impl Iterator<Item = RunnableRange> + '_ {
+        let root_language = self.language().map(|language| language.id());
         let mut syntax_matches = self.syntax.matches(offset_range, self, |grammar| {
             grammar.runnable_config.as_ref().map(|config| &config.query)
         });
@@ -5169,6 +5170,11 @@ impl BufferSnapshot {
         iter::from_fn(move || {
             loop {
                 let mat = syntax_matches.peek()?;
+
+                if Some(mat.language.id()) != root_language {
+                    syntax_matches.advance();
+                    continue;
+                }
 
                 let test_range = test_configs[mat.grammar_index].and_then(|test_configs| {
                     let mut run_range = None;

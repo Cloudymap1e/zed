@@ -628,6 +628,48 @@ async fn test_realfs_symlink_loop_metadata(executor: BackgroundExecutor) {
 }
 
 #[gpui::test]
+#[cfg(unix)]
+async fn test_realfs_trash_symlink_to_dir_preserves_target(
+    executor: BackgroundExecutor,
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let tempdir = TempDir::new().unwrap();
+    let root = tempdir.path();
+    let target_path = root.join("target");
+    let target_file_path = target_path.join("sentinel.txt");
+    let symlink_path = root.join("link");
+
+    std::fs::create_dir(&target_path).unwrap();
+    std::fs::write(&target_file_path, "do not trash target").unwrap();
+    std::os::unix::fs::symlink(&target_path, &symlink_path).unwrap();
+
+    let fs = RealFs::new(None, executor);
+    let trashed_entry = fs
+        .trash(
+            &symlink_path,
+            RemoveOptions {
+                recursive: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("trash symlink to directory");
+
+    let target_still_exists = target_file_path.exists();
+    let link_removed = std::fs::symlink_metadata(&symlink_path).is_err();
+    fs.restore(trashed_entry)
+        .await
+        .expect("restore trashed symlink");
+
+    assert!(
+        target_still_exists,
+        "trashing a symlink to a directory must not trash the target directory"
+    );
+    assert!(link_removed, "trashing should remove the symlink itself");
+}
+
+#[gpui::test]
 async fn test_fake_fs_trash(executor: BackgroundExecutor) {
     let fs = FakeFs::new(executor.clone());
     fs.insert_tree(

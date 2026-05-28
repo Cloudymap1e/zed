@@ -626,6 +626,15 @@ impl FileHandle for std::fs::File {
 
 pub struct RealWatcher {}
 
+fn absolute_path_for_trash(path: &Path) -> io::Result<PathBuf> {
+    std::path::absolute(path)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_absolute_path_for_trash(path: &Path) -> io::Result<PathBuf> {
+    absolute_path_for_trash(path)
+}
+
 impl RealFs {
     pub fn new(git_binary_path: Option<PathBuf>, executor: BackgroundExecutor) -> Self {
         Self {
@@ -927,10 +936,7 @@ impl Fs for RealFs {
         // We must make the path absolute or trash will make a weird abomination
         // of the zed working directory (not usually the worktree) and whatever
         // the path variable holds.
-        let path = self
-            .canonicalize(path)
-            .await
-            .context("Could not canonicalize the path of the file")?;
+        let path = absolute_path_for_trash(path).context("Could not absolutize the path")?;
 
         let (tx, rx) = futures::channel::oneshot::channel();
         std::thread::Builder::new()

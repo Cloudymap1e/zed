@@ -2852,8 +2852,7 @@ impl AcpThread {
         };
         let env = cx.spawn(async move |_, _| {
             let mut env = env.await.unwrap_or_default();
-            // Disables paging for `git` and hopefully other commands
-            env.insert("PAGER".into(), "".into());
+            apply_agent_terminal_env_defaults(&mut env);
             for var in extra_env {
                 env.insert(var.name, var.value);
             }
@@ -3123,6 +3122,15 @@ fn markdown_for_raw_output(
     }
 }
 
+fn apply_agent_terminal_env_defaults<S>(env: &mut HashMap<String, String, S>)
+where
+    S: std::hash::BuildHasher,
+{
+    // Disables paging for `git` and hopefully other commands.
+    env.insert("PAGER".into(), "".into());
+    env.insert("GIT_PAGER".into(), "cat".into());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3151,6 +3159,15 @@ mod tests {
             let settings_store = SettingsStore::test(cx);
             cx.set_global(settings_store);
         });
+    }
+
+    #[test]
+    fn test_agent_terminal_env_defaults_disable_git_pager() {
+        let mut env = HashMap::<String, String>::default();
+        apply_agent_terminal_env_defaults(&mut env);
+
+        assert_eq!(env.get("PAGER").map(String::as_str), Some(""));
+        assert_eq!(env.get("GIT_PAGER").map(String::as_str), Some("cat"));
     }
 
     #[gpui::test]

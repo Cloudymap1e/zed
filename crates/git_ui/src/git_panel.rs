@@ -2649,6 +2649,39 @@ impl GitPanel {
             .unwrap_or_else(|| BuiltInPrompt::CommitMessage.default_content().to_string())
     }
 
+    fn sanitize_generated_commit_message(message: &str) -> String {
+        fn find_ascii_case_insensitive(haystack: &str, needle: &str) -> Option<usize> {
+            haystack
+                .as_bytes()
+                .windows(needle.len())
+                .position(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
+        }
+
+        const OPEN_TAG: &str = "<think>";
+        const CLOSE_TAG: &str = "</think>";
+
+        let mut sanitized = String::with_capacity(message.len());
+        let mut rest = message;
+        loop {
+            let Some(open_tag_start) = find_ascii_case_insensitive(rest, OPEN_TAG) else {
+                sanitized.push_str(rest);
+                break;
+            };
+            let content_start = open_tag_start + OPEN_TAG.len();
+            let Some(close_tag_offset) =
+                find_ascii_case_insensitive(&rest[content_start..], CLOSE_TAG)
+            else {
+                sanitized.push_str(rest);
+                break;
+            };
+            let close_tag_end = content_start + close_tag_offset + CLOSE_TAG.len();
+
+            sanitized.push_str(&rest[..open_tag_start]);
+            rest = &rest[close_tag_end..];
+        }
+        sanitized.trim().to_string()
+    }
+
     /// Generates a commit message using an LLM.
     pub fn generate_commit_message(&mut self, cx: &mut Context<Self>) {
         if !self.can_commit() || !AgentSettings::get_global(cx).enabled(cx) {
@@ -2762,30 +2795,33 @@ impl GitPanel {
                 let stream = model.stream_completion_text(request, cx);
                 match stream.await {
                     Ok(mut messages) => {
-                        if !text_empty {
-                            this.update(cx, |this, cx| {
-                                this.commit_message_buffer(cx).update(cx, |buffer, cx| {
-                                    let insert_position = buffer.anchor_before(buffer.len());
-                                    buffer.edit([(insert_position..insert_position, "\n")], None, cx)
-                                });
-                            })?;
-                        }
-
+                        let mut generated_message = String::new();
                         while let Some(message) = messages.stream.next().await {
                             match message {
                                 Ok(text) => {
-                                    this.update(cx, |this, cx| {
-                                        this.commit_message_buffer(cx).update(cx, |buffer, cx| {
-                                            let insert_position = buffer.anchor_before(buffer.len());
-                                            buffer.edit([(insert_position..insert_position, text)], None, cx);
-                                        });
-                                    })?;
+                                    generated_message.push_str(&text);
                                 }
                                 Err(e) => {
                                     Self::show_commit_message_error(&this, &e, cx);
                                     break;
                                 }
                             }
+                        }
+
+                        let generated_message =
+                            Self::sanitize_generated_commit_message(&generated_message);
+                        if !generated_message.is_empty() {
+                            this.update(cx, |this, cx| {
+                                this.commit_message_buffer(cx).update(cx, |buffer, cx| {
+                                    let insert_position = buffer.anchor_before(buffer.len());
+                                    let message = if text_empty {
+                                        generated_message
+                                    } else {
+                                        format!("\n{generated_message}")
+                                    };
+                                    buffer.edit([(insert_position..insert_position, message)], None, cx);
+                                });
+                            })?;
                         }
                     }
                     Err(e) => {
@@ -8019,6 +8055,44 @@ mod tests {
             [...skipped 2 hunks...]
         "};
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_sanitize_generated_commit_message_strips_thinking_blocks() {
+        assert_eq!(
+            GitPanel::sanitize_generated_commit_message(
+                "<think>consider diff</think>\nUpdate parser"
+            ),
+            "Update parser"
+        );
+        assert_eq!(
+            GitPanel::sanitize_generated_commit_message(
+                "<think>reason</think>\nUpdate parser\n\nHandle empty input"
+            ),
+            "Update parser\n\nHandle empty input"
+        );
+        assert_eq!(
+            GitPanel::sanitize_generated_commit_message("Update parser\n\nHandle empty input"),
+            "Update parser\n\nHandle empty input"
+        );
+        assert_eq!(
+            GitPanel::sanitize_generated_commit_message(
+                "Strip <think> tags from generated commit messages"
+            ),
+            "Strip <think> tags from generated commit messages"
+        );
+        assert_eq!(
+            GitPanel::sanitize_generated_commit_message(
+                "<THINK>reason</THINK>\nUpdate parser\n<think>details</think>"
+            ),
+            "Update parser"
+        );
+        assert_eq!(
+            GitPanel::sanitize_generated_commit_message(
+                "Mention an unmatched <think> tag in the subject"
+            ),
+            "Mention an unmatched <think> tag in the subject"
+        );
     }
 
     #[gpui::test]

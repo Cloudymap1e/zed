@@ -1814,8 +1814,11 @@ impl EditorElement {
                         continue;
                     }
 
-                    let cursor_row_layout = &line_layouts
-                        [cursor_position.row().minus(visible_display_row_range.start) as usize];
+                    let Some(cursor_row_layout) = line_layouts
+                        .get(cursor_position.row().minus(visible_display_row_range.start) as usize)
+                    else {
+                        continue;
+                    };
                     let cursor_column = cursor_position.column() as usize;
 
                     let cursor_character_x = cursor_row_layout.x_for_index(cursor_column)

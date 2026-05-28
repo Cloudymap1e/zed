@@ -2947,10 +2947,14 @@ impl MultiBuffer {
                                 && snapshot.show_deleted_hunks
                             {
                                 let base_text = diff.base_text();
+                                let base_text_len = base_text.len();
+                                let base_text_byte_range =
+                                    hunk.diff_base_byte_range.start.min(base_text_len)
+                                        ..hunk.diff_base_byte_range.end.min(base_text_len);
                                 let mut text_cursor =
-                                    base_text.as_rope().cursor(hunk.diff_base_byte_range.start);
-                                let mut base_text_summary = text_cursor
-                                    .summary::<TextSummary>(hunk.diff_base_byte_range.end);
+                                    base_text.as_rope().cursor(base_text_byte_range.start);
+                                let mut base_text_summary =
+                                    text_cursor.summary::<TextSummary>(base_text_byte_range.end);
 
                                 let mut has_trailing_newline = false;
                                 if base_text_summary.last_line_chars > 0 {
@@ -2960,7 +2964,7 @@ impl MultiBuffer {
 
                                 new_diff_transforms.push(
                                     DiffTransform::DeletedHunk {
-                                        base_text_byte_range: hunk.diff_base_byte_range.clone(),
+                                        base_text_byte_range,
                                         summary: base_text_summary,
                                         buffer_id: buffer_snapshot.remote_id(),
                                         hunk_info,

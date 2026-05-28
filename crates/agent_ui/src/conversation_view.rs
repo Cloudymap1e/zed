@@ -1,8 +1,9 @@
 use acp_thread::{
     AcpThread, AcpThreadEvent, AgentThreadEntry, AssistantMessage, AssistantMessageChunk,
-    AuthRequired, LoadError, MaxOutputTokensError, MentionUri, PermissionOptionChoice,
-    PermissionOptions, PermissionPattern, RetryStatus, SelectedPermissionOutcome, ThreadStatus,
-    ToolCall, ToolCallContent, ToolCallStatus, UserMessageId,
+    AuthRequired, GoalUpdateStatus, LoadError, MaxOutputTokensError, MentionUri,
+    PermissionOptionChoice, PermissionOptions, PermissionPattern, RetryStatus,
+    SelectedPermissionOutcome, ThreadStatus, ToolCall, ToolCallContent, ToolCallStatus,
+    UserMessageId,
 };
 use acp_thread::{AgentConnection, Plan};
 use action_log::{ActionLog, ActionLogTelemetry, DiffStats};
@@ -1510,17 +1511,32 @@ impl ConversationView {
                     return;
                 }
 
-                let used_tools = thread.read(cx).used_tools_since_last_user_message();
-                self.notify_with_sound(
-                    if used_tools {
-                        "Finished running tools"
-                    } else {
-                        "New message"
-                    },
-                    IconName::ZedAssistant,
-                    window,
-                    cx,
-                );
+                let goal_update_status =
+                    thread.update(cx, |thread, _cx| thread.take_goal_update_since_last_stop());
+                match goal_update_status {
+                    Some(GoalUpdateStatus::Complete) => {
+                        self.notify_with_sound("Goal reached", IconName::ZedAssistant, window, cx);
+                    }
+                    Some(
+                        GoalUpdateStatus::Active
+                        | GoalUpdateStatus::Paused
+                        | GoalUpdateStatus::BudgetLimited
+                        | GoalUpdateStatus::Cleared,
+                    ) => {}
+                    None => {
+                        let used_tools = thread.read(cx).used_tools_since_last_user_message();
+                        self.notify_with_sound(
+                            if used_tools {
+                                "Finished running tools"
+                            } else {
+                                "New message"
+                            },
+                            IconName::ZedAssistant,
+                            window,
+                            cx,
+                        );
+                    }
+                }
 
                 let should_send_queued = if let Some(active) = self.root_thread_view() {
                     active.update(cx, |active, cx| {

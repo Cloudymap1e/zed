@@ -1082,6 +1082,15 @@ struct RunningTurn {
     send_task: Task<()>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GoalUpdateStatus {
+    Active,
+    Paused,
+    BudgetLimited,
+    Complete,
+    Cleared,
+}
+
 pub struct AcpThread {
     session_id: acp::SessionId,
     work_dirs: Option<PathList>,
@@ -1105,6 +1114,7 @@ pub struct AcpThread {
     pending_terminal_output: HashMap<acp::TerminalId, Vec<Vec<u8>>>,
     pending_terminal_exit: HashMap<acp::TerminalId, acp::TerminalExitStatus>,
     had_error: bool,
+    goal_update_since_last_stop: Option<GoalUpdateStatus>,
     /// The user's unsent prompt text, persisted so it can be restored when reloading the thread.
     draft_prompt: Option<Vec<acp::ContentBlock>>,
     /// The initial scroll position for the thread view, set during session registration.
@@ -1296,6 +1306,7 @@ impl AcpThread {
             pending_terminal_output: HashMap::default(),
             pending_terminal_exit: HashMap::default(),
             had_error: false,
+            goal_update_since_last_stop: None,
             draft_prompt: None,
             ui_scroll_position: None,
             streaming_text_buffer: None,
@@ -1472,6 +1483,30 @@ impl AcpThread {
         false
     }
 
+    pub fn take_goal_update_since_last_stop(&mut self) -> Option<GoalUpdateStatus> {
+        self.goal_update_since_last_stop.take()
+    }
+
+    fn goal_update_status_from_content(content: &acp::ContentBlock) -> Option<GoalUpdateStatus> {
+        let acp::ContentBlock::Text(text) = content else {
+            return None;
+        };
+        let text = text.text.trim_start();
+        if text.starts_with("Goal updated (active):") {
+            Some(GoalUpdateStatus::Active)
+        } else if text.starts_with("Goal updated (paused):") {
+            Some(GoalUpdateStatus::Paused)
+        } else if text.starts_with("Goal updated (budget limited):") {
+            Some(GoalUpdateStatus::BudgetLimited)
+        } else if text.starts_with("Goal updated (complete):") {
+            Some(GoalUpdateStatus::Complete)
+        } else if text.starts_with("Goal cleared.") {
+            Some(GoalUpdateStatus::Cleared)
+        } else {
+            None
+        }
+    }
+
     pub fn handle_session_update(
         &mut self,
         update: acp::SessionUpdate,
@@ -1492,6 +1527,9 @@ impl AcpThread {
                 }
             }
             acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk { content, .. }) => {
+                if let Some(status) = Self::goal_update_status_from_content(&content) {
+                    self.goal_update_since_last_stop = Some(status);
+                }
                 self.push_assistant_content_block(content, false, cx);
             }
             acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk { content, .. }) => {
@@ -3536,6 +3574,50 @@ mod tests {
             } else {
                 panic!("Expected UserMessage at index 2");
             }
+        });
+    }
+
+    #[gpui::test]
+    async fn test_goal_update_status_is_tracked_until_stop(cx: &mut gpui::TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, [], cx).await;
+        let connection = Rc::new(FakeAgentConnection::new());
+        let thread = cx
+            .update(|cx| {
+                connection.new_session(project, PathList::new(&[Path::new(path!("/test"))]), cx)
+            })
+            .await
+            .unwrap();
+
+        thread.update(cx, |thread, cx| {
+            thread
+                .handle_session_update(
+                    acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+                        "Goal updated (active): Ship it".into(),
+                    )),
+                    cx,
+                )
+                .unwrap();
+            assert_eq!(
+                thread.take_goal_update_since_last_stop(),
+                Some(GoalUpdateStatus::Active)
+            );
+            assert_eq!(thread.take_goal_update_since_last_stop(), None);
+
+            thread
+                .handle_session_update(
+                    acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+                        "Goal updated (complete): Ship it".into(),
+                    )),
+                    cx,
+                )
+                .unwrap();
+            assert_eq!(
+                thread.take_goal_update_since_last_stop(),
+                Some(GoalUpdateStatus::Complete)
+            );
         });
     }
 

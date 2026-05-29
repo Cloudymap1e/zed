@@ -477,6 +477,8 @@ pub struct EditPredictionSettings {
     /// Settings specific to Ollama.
     pub ollama: Option<OpenAiCompatibleEditPredictionSettings>,
     pub open_ai_compatible_api: Option<OpenAiCompatibleEditPredictionSettings>,
+    pub groq: Option<OpenAiCompatibleEditPredictionSettings>,
+    pub cerebras: Option<OpenAiCompatibleEditPredictionSettings>,
     pub examples_dir: Option<Arc<Path>>,
     /// Controls whether training data collection is enabled.
     ///
@@ -818,21 +820,28 @@ impl settings::Settings for AllLanguageSettings {
                 api_url: ollama.api_url.unwrap().into(),
                 prompt_format: ollama.prompt_format.unwrap(),
             });
-        let openai_compatible_settings = edit_predictions.open_ai_compatible_api.unwrap();
-        let openai_compatible_settings = openai_compatible_settings
-            .model
-            .filter(|model| !model.is_empty())
-            .zip(
-                openai_compatible_settings
-                    .api_url
-                    .filter(|api_url| !api_url.is_empty()),
-            )
-            .map(|(model, api_url)| OpenAiCompatibleEditPredictionSettings {
-                model,
-                max_output_tokens: openai_compatible_settings.max_output_tokens.unwrap(),
-                api_url: api_url.into(),
-                prompt_format: openai_compatible_settings.prompt_format.unwrap(),
-            });
+        let parse_open_ai_compatible_settings =
+            |open_ai_compatible_settings: settings::CustomEditPredictionProviderSettingsContent| {
+                open_ai_compatible_settings
+                    .model
+                    .filter(|model| !model.is_empty())
+                    .zip(
+                        open_ai_compatible_settings
+                            .api_url
+                            .filter(|api_url| !api_url.is_empty()),
+                    )
+                    .map(|(model, api_url)| OpenAiCompatibleEditPredictionSettings {
+                        model,
+                        max_output_tokens: open_ai_compatible_settings.max_output_tokens.unwrap(),
+                        api_url: api_url.into(),
+                        prompt_format: open_ai_compatible_settings.prompt_format.unwrap(),
+                    })
+            };
+        let openai_compatible_settings =
+            parse_open_ai_compatible_settings(edit_predictions.open_ai_compatible_api.unwrap());
+        let groq_settings = parse_open_ai_compatible_settings(edit_predictions.groq.unwrap());
+        let cerebras_settings =
+            parse_open_ai_compatible_settings(edit_predictions.cerebras.unwrap());
 
         let mut file_types: FxHashMap<Arc<str>, (GlobSet, Vec<String>)> = FxHashMap::default();
 
@@ -871,6 +880,8 @@ impl settings::Settings for AllLanguageSettings {
                 codestral: codestral_settings,
                 ollama: ollama_settings,
                 open_ai_compatible_api: openai_compatible_settings,
+                groq: groq_settings,
+                cerebras: cerebras_settings,
                 examples_dir: edit_predictions.examples_dir,
                 allow_data_collection: edit_predictions.allow_data_collection.unwrap_or_default(),
             },

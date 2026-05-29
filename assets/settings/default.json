@@ -1697,6 +1697,18 @@
       "prompt_format": "infer",
       "max_output_tokens": 64,
     },
+    "groq": {
+      "api_url": "https://api.groq.com/openai/v1",
+      "model": "",
+      "prompt_format": "infer",
+      "max_output_tokens": 64,
+    },
+    "cerebras": {
+      "api_url": "https://api.cerebras.ai/v1",
+      "model": "",
+      "prompt_format": "infer",
+      "max_output_tokens": 64,
+    },
     // Controls whether Zed may collect training data when using Zed's Edit Predictions.
     // Data is only captured when the project is detected as open source.
     // Possible values:

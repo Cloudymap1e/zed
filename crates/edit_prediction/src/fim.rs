@@ -1,6 +1,6 @@
 use crate::{
     EditPredictionId, EditPredictionModelInput, cursor_excerpt,
-    open_ai_compatible::{self, load_open_ai_compatible_api_key_if_needed},
+    open_ai_compatible::{self, load_open_ai_compatible_api_keys_if_needed},
     prediction::EditPredictionResult,
 };
 use anyhow::{Context as _, Result, anyhow};
@@ -47,17 +47,13 @@ pub fn request_prediction(
     let cursor_point = position.to_point(&snapshot);
     let request_start = cx.background_executor().now();
 
-    let Some(settings) = (match provider {
-        settings::EditPredictionProvider::Ollama => settings.ollama.clone(),
-        settings::EditPredictionProvider::OpenAiCompatibleApi => {
-            settings.open_ai_compatible_api.clone()
-        }
-        _ => None,
-    }) else {
+    let Some(settings) =
+        open_ai_compatible::custom_settings_for_provider(settings, provider).cloned()
+    else {
         return Task::ready(Err(anyhow!("Unsupported edit prediction provider for FIM")));
     };
 
-    let api_key = load_open_ai_compatible_api_key_if_needed(provider, cx);
+    let api_keys = load_open_ai_compatible_api_keys_if_needed(provider, cx);
 
     let result = cx.background_spawn(async move {
         let cursor_offset = cursor_point.to_offset(&snapshot);
@@ -107,7 +103,7 @@ pub fn request_prediction(
             prompt,
             max_tokens,
             stop_tokens,
-            api_key,
+            api_keys,
             &http_client,
         )
         .await?;

@@ -30,7 +30,7 @@ use zeta_prompt::{
 };
 
 use crate::open_ai_compatible::{
-    load_open_ai_compatible_api_key_if_needed, send_custom_server_request,
+    self, load_open_ai_compatible_api_keys_if_needed, send_custom_server_request,
 };
 
 pub fn request_prediction_with_zeta(
@@ -55,19 +55,14 @@ pub fn request_prediction_with_zeta(
 ) -> Task<Result<Option<EditPredictionResult>>> {
     let settings = &all_language_settings(None, cx).edit_predictions;
     let provider = settings.provider;
-    let custom_server_settings = match provider {
-        settings::EditPredictionProvider::Ollama => settings.ollama.clone(),
-        settings::EditPredictionProvider::OpenAiCompatibleApi => {
-            settings.open_ai_compatible_api.clone()
-        }
-        _ => None,
-    };
+    let custom_server_settings =
+        open_ai_compatible::custom_settings_for_provider(settings, provider).cloned();
 
     let http_client = cx.http_client();
     let request_start = cx.background_executor().now();
     let raw_config = store.zeta2_raw_config().cloned();
     let preferred_experiment = store.preferred_experiment().map(|s| s.to_owned());
-    let open_ai_compatible_api_key = load_open_ai_compatible_api_key_if_needed(provider, cx);
+    let open_ai_compatible_api_keys = load_open_ai_compatible_api_keys_if_needed(provider, cx);
 
     let excerpt_path = buffer_path_with_id_fallback(snapshot.file(), &snapshot.text, cx);
 
@@ -166,7 +161,7 @@ pub fn request_prediction_with_zeta(
                                 prompt,
                                 max_tokens,
                                 stop_tokens,
-                                open_ai_compatible_api_key.clone(),
+                                open_ai_compatible_api_keys.clone(),
                                 &http_client,
                             )
                             .await?;
@@ -197,7 +192,7 @@ pub fn request_prediction_with_zeta(
                                     .iter()
                                     .map(|token| token.to_string())
                                     .collect(),
-                                open_ai_compatible_api_key.clone(),
+                                open_ai_compatible_api_keys.clone(),
                                 &http_client,
                             )
                             .await?;

@@ -350,6 +350,25 @@ impl AgentServer for CustomAgentServer {
         }
         let store = delegate.store.downgrade();
         cx.spawn(async move |cx| {
+            if agent_id.as_ref() == CODEX_ID {
+                match crate::codex_native::connect(
+                    agent_id.clone(),
+                    project.clone(),
+                    default_model.clone(),
+                    extra_env.clone().into_iter().collect(),
+                    cx,
+                )
+                .await
+                {
+                    Ok(connection) => return Ok(connection),
+                    Err(error) => {
+                        log::warn!(
+                            "Native Codex app-server unavailable; falling back to codex-acp: {error:#}"
+                        );
+                    }
+                }
+            }
+
             if is_registry_agent && agent_id.as_ref() == GEMINI_ID {
                 if let Some(api_key) = cx.update(api_key_for_gemini_cli).await.ok() {
                     extra_env.insert("GEMINI_API_KEY".into(), api_key);

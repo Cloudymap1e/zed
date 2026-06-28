@@ -335,10 +335,6 @@ impl ToolCall {
             .as_ref()
             .and_then(|input| markdown_for_raw_output(input, &language_registry, cx));
 
-        let tool_name = tool_name_from_meta(&tool_call.meta);
-
-        let subagent_session_info = subagent_session_info_from_meta(&tool_call.meta);
-
         let result = Self {
             id: tool_call.tool_call_id,
             label: cx
@@ -351,8 +347,8 @@ impl ToolCall {
             raw_input: tool_call.raw_input,
             raw_input_markdown,
             raw_output: tool_call.raw_output,
-            tool_name,
-            subagent_session_info,
+            tool_name: tool_name_from_meta(&tool_call.meta),
+            subagent_session_info: subagent_session_info_from_meta(&tool_call.meta),
         };
         Ok(result)
     }
@@ -383,6 +379,10 @@ impl ToolCall {
 
         if let Some(status) = status {
             self.status = status.into();
+        }
+
+        if let Some(tool_name) = tool_name_from_meta(&meta) {
+            self.tool_name = Some(tool_name);
         }
 
         if let Some(subagent_session_info) = subagent_session_info_from_meta(&meta) {
@@ -480,6 +480,12 @@ impl ToolCall {
     pub fn is_subagent(&self) -> bool {
         self.tool_name.as_ref().is_some_and(|s| s == "spawn_agent")
             || self.subagent_session_info.is_some()
+    }
+
+    fn subagent_session_id(&self) -> Option<acp::SessionId> {
+        self.subagent_session_info
+            .as_ref()
+            .map(|info| info.session_id.clone())
     }
 
     pub fn to_markdown(&self, cx: &App) -> String {
@@ -1959,37 +1965,59 @@ impl AcpThread {
                 return Ok(());
             }
         };
-        let AgentThreadEntry::ToolCall(call) = &mut self.entries[ix] else {
-            unreachable!()
-        };
+        let (subagent_session_id, should_emit_subagent_spawned, location_updated_id) = {
+            let AgentThreadEntry::ToolCall(call) = &mut self.entries[ix] else {
+                unreachable!()
+            };
+            let previous_subagent_session_id = call.subagent_session_id();
+            let mut location_updated_id = None;
 
-        match update {
-            ToolCallUpdate::UpdateFields(update) => {
-                let location_updated = update.fields.locations.is_some();
-                call.update_fields(
-                    update.fields,
-                    update.meta,
-                    languages,
-                    path_style,
-                    &self.terminals,
-                    cx,
-                )?;
-                if location_updated {
-                    self.resolve_locations(update.tool_call_id, cx);
+            match update {
+                ToolCallUpdate::UpdateFields(update) => {
+                    let location_updated = update.fields.locations.is_some();
+                    let tool_call_id = update.tool_call_id.clone();
+                    call.update_fields(
+                        update.fields,
+                        update.meta,
+                        languages,
+                        path_style,
+                        &self.terminals,
+                        cx,
+                    )?;
+                    if location_updated {
+                        location_updated_id = Some(tool_call_id);
+                    }
+                }
+                ToolCallUpdate::UpdateDiff(update) => {
+                    call.content.clear();
+                    call.content.push(ToolCallContent::Diff(update.diff));
+                }
+                ToolCallUpdate::UpdateTerminal(update) => {
+                    call.content.clear();
+                    call.content
+                        .push(ToolCallContent::Terminal(update.terminal));
                 }
             }
-            ToolCallUpdate::UpdateDiff(update) => {
-                call.content.clear();
-                call.content.push(ToolCallContent::Diff(update.diff));
-            }
-            ToolCallUpdate::UpdateTerminal(update) => {
-                call.content.clear();
-                call.content
-                    .push(ToolCallContent::Terminal(update.terminal));
-            }
-        }
+
+            let subagent_session_id = call.subagent_session_id();
+            let should_emit_subagent_spawned = subagent_session_id.is_some()
+                && subagent_session_id != previous_subagent_session_id;
+            (
+                subagent_session_id,
+                should_emit_subagent_spawned,
+                location_updated_id,
+            )
+        };
 
         cx.emit(AcpThreadEvent::EntryUpdated(ix));
+        if let Some(subagent_session_id) = subagent_session_id
+            && should_emit_subagent_spawned
+        {
+            cx.emit(AcpThreadEvent::SubagentSpawned(subagent_session_id));
+        }
+        if let Some(location_updated_id) = location_updated_id {
+            self.resolve_locations(location_updated_id, cx);
+        }
 
         Ok(())
     }
@@ -2034,21 +2062,33 @@ impl AcpThread {
         }
 
         if let Some(ix) = self.index_for_tool_call(&id) {
-            let AgentThreadEntry::ToolCall(call) = &mut self.entries[ix] else {
-                unreachable!()
+            let (subagent_session_id, should_emit_subagent_spawned) = {
+                let AgentThreadEntry::ToolCall(call) = &mut self.entries[ix] else {
+                    unreachable!()
+                };
+                let previous_subagent_session_id = call.subagent_session_id();
+
+                call.update_fields(
+                    update.fields,
+                    update.meta,
+                    language_registry,
+                    path_style,
+                    &self.terminals,
+                    cx,
+                )?;
+                call.status = status;
+                let subagent_session_id = call.subagent_session_id();
+                let should_emit_subagent_spawned = subagent_session_id.is_some()
+                    && subagent_session_id != previous_subagent_session_id;
+                (subagent_session_id, should_emit_subagent_spawned)
             };
 
-            call.update_fields(
-                update.fields,
-                update.meta,
-                language_registry,
-                path_style,
-                &self.terminals,
-                cx,
-            )?;
-            call.status = status;
-
             cx.emit(AcpThreadEvent::EntryUpdated(ix));
+            if let Some(subagent_session_id) = subagent_session_id
+                && should_emit_subagent_spawned
+            {
+                cx.emit(AcpThreadEvent::SubagentSpawned(subagent_session_id));
+            }
         } else {
             let call = ToolCall::from_acp(
                 update.try_into()?,
@@ -2058,7 +2098,11 @@ impl AcpThread {
                 &self.terminals,
                 cx,
             )?;
+            let subagent_session_id = call.subagent_session_id();
             self.push_entry(AgentThreadEntry::ToolCall(call), cx);
+            if let Some(subagent_session_id) = subagent_session_id {
+                cx.emit(AcpThreadEvent::SubagentSpawned(subagent_session_id));
+            }
         };
 
         self.resolve_locations(id, cx);
@@ -4763,6 +4807,96 @@ mod tests {
         fn run(&self, _message_id: UserMessageId, _cx: &mut App) -> Task<Result<()>> {
             Task::ready(Ok(()))
         }
+    }
+
+    #[gpui::test]
+    async fn test_subagent_metadata_update_emits_spawned_once(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        let project = Project::test(fs, [], cx).await;
+        let connection = Rc::new(FakeAgentConnection::new());
+        let thread = cx
+            .update(|cx| {
+                connection.new_session(project, PathList::new(&[Path::new(path!("/test"))]), cx)
+            })
+            .await
+            .unwrap();
+
+        let spawned_sessions = Rc::new(RefCell::new(Vec::<acp::SessionId>::new()));
+        let spawned_sessions_capture = spawned_sessions.clone();
+        thread.update(cx, |_thread, cx| {
+            cx.subscribe(
+                &thread,
+                move |_thread, _event_thread, event: &AcpThreadEvent, _cx| {
+                    if let AcpThreadEvent::SubagentSpawned(session_id) = event {
+                        spawned_sessions_capture
+                            .borrow_mut()
+                            .push(session_id.clone());
+                    }
+                },
+            )
+            .detach();
+        });
+
+        let tool_call_id = acp::ToolCallId::new("spawn-agent");
+        let subagent_session_id = acp::SessionId::new("subagent-session");
+        let subagent_meta = acp::Meta::from_iter([(
+            SUBAGENT_SESSION_INFO_META_KEY.into(),
+            serde_json::json!({
+                "session_id": subagent_session_id,
+                "message_start_index": 0,
+                "message_end_index": null
+            }),
+        )]);
+
+        thread
+            .update(cx, |thread, cx| {
+                thread.handle_session_update(
+                    acp::SessionUpdate::ToolCall(
+                        acp::ToolCall::new(tool_call_id.clone(), "Spawn subagent")
+                            .kind(acp::ToolKind::Other)
+                            .status(acp::ToolCallStatus::InProgress),
+                    ),
+                    cx,
+                )
+            })
+            .unwrap();
+
+        thread
+            .update(cx, |thread, cx| {
+                thread.handle_session_update(
+                    acp::SessionUpdate::ToolCallUpdate(
+                        acp::ToolCallUpdate::new(
+                            tool_call_id.clone(),
+                            acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed),
+                        )
+                        .meta(subagent_meta.clone()),
+                    ),
+                    cx,
+                )
+            })
+            .unwrap();
+
+        thread
+            .update(cx, |thread, cx| {
+                thread.handle_session_update(
+                    acp::SessionUpdate::ToolCallUpdate(
+                        acp::ToolCallUpdate::new(
+                            tool_call_id,
+                            acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed),
+                        )
+                        .meta(subagent_meta),
+                    ),
+                    cx,
+                )
+            })
+            .unwrap();
+
+        assert_eq!(
+            spawned_sessions.borrow().as_slice(),
+            &[acp::SessionId::new("subagent-session")]
+        );
     }
 
     #[gpui::test]

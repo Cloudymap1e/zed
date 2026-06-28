@@ -1,4 +1,5 @@
 mod acp;
+mod codex_native;
 mod custom;
 
 #[cfg(any(test, feature = "test-support"))]

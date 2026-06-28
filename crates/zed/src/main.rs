@@ -1599,8 +1599,15 @@ pub(crate) async fn restorable_workspace_locations(
 }
 
 fn init_paths() -> HashMap<io::ErrorKind, Vec<&'static Path>> {
+    let mut errors = HashMap::default();
+
+    for path in [paths::config_dir(), paths::data_dir()] {
+        if let Err(e) = paths::ensure_directory(path) {
+            errors.entry(e.kind()).or_insert_with(Vec::new).push(path);
+        }
+    }
+
     [
-        paths::config_dir(),
         paths::extensions_dir(),
         paths::languages_dir(),
         paths::debug_adapters_dir(),
@@ -1610,7 +1617,7 @@ fn init_paths() -> HashMap<io::ErrorKind, Vec<&'static Path>> {
         paths::hang_traces_dir(),
     ]
     .into_iter()
-    .fold(HashMap::default(), |mut errors, path| {
+    .fold(errors, |mut errors, path| {
         if let Err(e) = std::fs::create_dir_all(path) {
             errors.entry(e.kind()).or_insert_with(Vec::new).push(path);
         }

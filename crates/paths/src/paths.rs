@@ -1,6 +1,6 @@
 //! Paths to locations used by Zed.
 
-use std::env;
+use std::{env, fs, io};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, OnceLock};
 
@@ -71,7 +71,7 @@ pub fn set_custom_data_dir(dir: &str) -> &'static PathBuf {
     }
     CUSTOM_DATA_DIR.get_or_init(|| {
         let path = PathBuf::from(dir);
-        std::fs::create_dir_all(&path).expect("failed to create custom data directory");
+        ensure_directory(&path).expect("failed to create custom data directory");
         let canonicalized = path
             .canonicalize()
             .expect("failed to canonicalize custom data directory's path to an absolute path");
@@ -81,6 +81,39 @@ pub fn set_custom_data_dir(dir: &str) -> &'static PathBuf {
         // don't choke on the verbatim syntax.
         SanitizedPath::new(&canonicalized).as_path().to_path_buf()
     })
+}
+
+/// Ensures a directory exists, repairing a broken symlink at the path if needed.
+pub fn ensure_directory(path: &Path) -> io::Result<()> {
+    match symlink_target_is_directory(path)? {
+        Some(true) => Ok(()),
+        Some(false) => {
+            fs::remove_file(path)?;
+            fs::create_dir_all(path)
+        }
+        None => fs::create_dir_all(path),
+    }
+}
+
+fn symlink_target_is_directory(path: &Path) -> io::Result<Option<bool>> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err),
+    };
+
+    if !metadata.file_type().is_symlink() {
+        return Ok(None);
+    }
+
+    let target = fs::read_link(path)?;
+    let target = if target.is_absolute() {
+        target
+    } else {
+        path.parent().unwrap_or_else(|| Path::new(".")).join(target)
+    };
+
+    Ok(Some(target.is_dir()))
 }
 
 /// Returns the path to the configuration directory used by Zed.
@@ -571,4 +604,44 @@ pub fn global_gitignore_path() -> Option<PathBuf> {
     GLOBAL_GITIGNORE_PATH
         .get_or_init(::ignore::gitignore::gitconfig_excludes_path)
         .clone()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    use std::os::unix::fs::symlink;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "zed-paths-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time before UNIX_EPOCH")
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn ensure_directory_repairs_broken_symlink() {
+        let root = unique_temp_dir("broken-symlink");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let broken_link = root.join("Zed");
+        let missing_target = root.join("missing-target");
+        symlink(&missing_target, &broken_link).unwrap();
+
+        assert!(fs::symlink_metadata(&broken_link).unwrap().file_type().is_symlink());
+
+        ensure_directory(&broken_link).unwrap();
+
+        assert!(broken_link.is_dir());
+        assert!(!fs::symlink_metadata(&broken_link).unwrap().file_type().is_symlink());
+
+        let _ = fs::remove_dir_all(&root);
+    }
 }

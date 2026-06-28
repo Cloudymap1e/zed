@@ -3223,6 +3223,10 @@ async fn run_commit_msg_hook(
 
     let hook_abs_path = commit_msg_hook_path(git_binary, repository, env).await;
     if is_executable_hook(&hook_abs_path) {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Fallback hook execution runs the hook script itself, not the git binary"
+        )]
         let output = new_command(&hook_abs_path)
             .arg(message_file_path)
             .envs(env.iter())

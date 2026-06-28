@@ -357,7 +357,7 @@ fn spawn_posix_spawn(
     let current_dir_cstr =
         CString::new(current_dir.as_os_str().as_bytes()).map_err(|_| invalid_input_error())?;
 
-    let mut argv_cstrs = vec![program_cstr.clone()];
+    let mut argv_cstrs = vec![program_cstr];
     for arg in args {
         let cstr = CString::new(arg.as_bytes()).map_err(|_| invalid_input_error())?;
         argv_cstrs.push(cstr);

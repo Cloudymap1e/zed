@@ -6,6 +6,7 @@ use action_log::ActionLog;
 use agent_client_protocol::schema as acp;
 use anyhow::{Context as _, Result, anyhow, bail};
 use chrono::{TimeZone as _, Utc};
+use futures::FutureExt as _;
 use gpui::{App, AppContext as _, AsyncApp, Entity, SharedString, Task, WeakEntity};
 use project::{AgentId, Project};
 use serde_json::{Value, json};
@@ -25,6 +26,7 @@ use std::{
         mpsc,
     },
     thread,
+    time::Duration,
 };
 use util::ResultExt as _;
 use util::path_list::PathList;
@@ -38,6 +40,7 @@ const CODEX_NATIVE_TELEMETRY_ID: &str = "codex-native";
 const ZED_CODEX_NATIVE_ENV: &str = "ZED_CODEX_NATIVE";
 const ZED_CODEX_EXECUTABLE_ENV: &str = "ZED_CODEX_EXECUTABLE";
 const ZED_SPAWN_AGENT_TOOL_NAME: &str = "spawn_agent";
+const NATIVE_TURN_START_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
 struct CodexVersion {
@@ -219,6 +222,7 @@ pub struct CodexNativeConnection {
     telemetry_id: SharedString,
     client: CodexAppServerClient,
     sessions: Rc<RefCell<HashMap<acp::SessionId, CodexNativeSession>>>,
+    pending_turn_starts: Rc<RefCell<HashMap<acp::SessionId, async_channel::Sender<String>>>>,
     pending_turns: Rc<RefCell<HashMap<String, async_channel::Sender<acp::StopReason>>>>,
     completed_turns: Rc<RefCell<HashMap<String, acp::StopReason>>>,
     auth_methods: Vec<acp::AuthMethod>,
@@ -265,6 +269,7 @@ pub async fn connect(
         .context("failed to initialize Codex app-server")?;
 
     let sessions = Rc::new(RefCell::new(HashMap::new()));
+    let pending_turn_starts = Rc::new(RefCell::new(HashMap::new()));
     let pending_turns = Rc::new(RefCell::new(HashMap::new()));
     let completed_turns = Rc::new(RefCell::new(HashMap::new()));
     let tool_outputs = Rc::new(RefCell::new(HashMap::new()));
@@ -273,6 +278,7 @@ pub async fn connect(
     let dispatch_task = cx.spawn({
         let client = client.clone();
         let sessions = sessions.clone();
+        let pending_turn_starts = pending_turn_starts.clone();
         let pending_turns = pending_turns.clone();
         let completed_turns = completed_turns.clone();
         let session_list = session_list.clone();
@@ -282,6 +288,7 @@ pub async fn connect(
                     message,
                     &client,
                     &sessions,
+                    &pending_turn_starts,
                     &pending_turns,
                     &completed_turns,
                     &tool_outputs,
@@ -299,6 +306,7 @@ pub async fn connect(
         telemetry_id: CODEX_NATIVE_TELEMETRY_ID.into(),
         client,
         sessions,
+        pending_turn_starts,
         pending_turns,
         completed_turns,
         auth_methods: Vec::new(),
@@ -483,11 +491,12 @@ impl AgentConnection for CodexNativeConnection {
     ) -> Task<Result<acp::PromptResponse>> {
         let client = self.client.clone();
         let sessions = self.sessions.clone();
+        let pending_turn_starts = self.pending_turn_starts.clone();
         let pending_turns = self.pending_turns.clone();
         let completed_turns = self.completed_turns.clone();
         let session_id = params.session_id.clone();
 
-        cx.foreground_executor().spawn(async move {
+        cx.spawn(async move |cx| {
             let input = prompt_blocks_to_codex_input(params.prompt)?;
             let Some(command) = native_slash_command(&input)? else {
                 let response = client
@@ -522,11 +531,13 @@ impl AgentConnection for CodexNativeConnection {
                 &client,
                 &session_id,
                 &sessions,
+                &pending_turn_starts,
                 &pending_turns,
                 &completed_turns,
                 command,
+                cx,
             )
-                .await
+            .await
         })
     }
 
@@ -763,6 +774,7 @@ async fn handle_inbound_message(
     message: CodexInboundMessage,
     client: &CodexAppServerClient,
     sessions: &Rc<RefCell<HashMap<acp::SessionId, CodexNativeSession>>>,
+    pending_turn_starts: &Rc<RefCell<HashMap<acp::SessionId, async_channel::Sender<String>>>>,
     pending_turns: &Rc<RefCell<HashMap<String, async_channel::Sender<acp::StopReason>>>>,
     completed_turns: &Rc<RefCell<HashMap<String, acp::StopReason>>>,
     tool_outputs: &Rc<RefCell<HashMap<String, String>>>,
@@ -775,6 +787,7 @@ async fn handle_inbound_message(
                 &method,
                 &params,
                 sessions,
+                pending_turn_starts,
                 pending_turns,
                 completed_turns,
                 tool_outputs,
@@ -799,12 +812,17 @@ async fn handle_server_notification(
     method: &str,
     params: &Value,
     sessions: &Rc<RefCell<HashMap<acp::SessionId, CodexNativeSession>>>,
+    pending_turn_starts: &Rc<RefCell<HashMap<acp::SessionId, async_channel::Sender<String>>>>,
     pending_turns: &Rc<RefCell<HashMap<String, async_channel::Sender<acp::StopReason>>>>,
     completed_turns: &Rc<RefCell<HashMap<String, acp::StopReason>>>,
     tool_outputs: &Rc<RefCell<HashMap<String, String>>>,
     session_list: &Rc<CodexNativeSessionList>,
     cx: &mut AsyncApp,
 ) {
+    if method == "turn/started" {
+        start_turn(params, pending_turn_starts);
+    }
+
     if method == "turn/completed" {
         complete_turn(params, sessions, pending_turns, completed_turns);
     }
@@ -1110,22 +1128,7 @@ fn thread_goal_update(params: &Value) -> Vec<(acp::SessionId, acp::SessionUpdate
     let Some(goal) = params.get("goal") else {
         return Vec::new();
     };
-    let objective = goal
-        .get("objective")
-        .and_then(Value::as_str)
-        .unwrap_or("No objective");
-    let status = goal
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    let mut lines = vec![format!("Goal ({status})"), format!("Objective: {objective}")];
-    if let Some(tokens_used) = goal.get("tokensUsed").and_then(Value::as_u64) {
-        lines.push(format!("Tokens used: {tokens_used}"));
-    }
-    if let Some(token_budget) = goal.get("tokenBudget").and_then(Value::as_u64) {
-        lines.push(format!("Token budget: {token_budget}"));
-    }
-    text_message_update(thread_id, lines.join("\n"))
+    text_message_update(thread_id, goal_message(goal))
 }
 
 fn thread_goal_cleared_update(params: &Value) -> Vec<(acp::SessionId, acp::SessionUpdate)> {
@@ -1142,16 +1145,32 @@ fn compacted_update(params: &Value) -> Vec<(acp::SessionId, acp::SessionUpdate)>
     text_message_update(thread_id, "Context compacted.".to_owned())
 }
 
-fn text_message_update(
-    thread_id: &str,
-    text: String,
-) -> Vec<(acp::SessionId, acp::SessionUpdate)> {
+fn text_message_update(thread_id: &str, text: String) -> Vec<(acp::SessionId, acp::SessionUpdate)> {
     vec![(
         acp::SessionId::new(thread_id.to_owned()),
         acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
             acp::TextContent::new(text),
         ))),
     )]
+}
+
+fn goal_message(goal: &Value) -> String {
+    let objective = goal
+        .get("objective")
+        .and_then(Value::as_str)
+        .unwrap_or("No objective");
+    let status = goal
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let mut lines = vec![format!("Goal updated ({status}): {objective}")];
+    if let Some(tokens_used) = goal.get("tokensUsed").and_then(Value::as_u64) {
+        lines.push(format!("Tokens used: {tokens_used}"));
+    }
+    if let Some(token_budget) = goal.get("tokenBudget").and_then(Value::as_u64) {
+        lines.push(format!("Token budget: {token_budget}"));
+    }
+    lines.join("\n")
 }
 
 fn token_usage_update(params: &Value) -> Vec<(acp::SessionId, acp::SessionUpdate)> {
@@ -1335,10 +1354,7 @@ fn tool_lifecycle_update(
             .status(status)
             .raw_input(item.clone());
         tool_call.meta = collab_tool_call_meta(item);
-        vec![(
-            session_id.clone(),
-            acp::SessionUpdate::ToolCall(tool_call),
-        )]
+        vec![(session_id.clone(), acp::SessionUpdate::ToolCall(tool_call))]
     }
 }
 
@@ -1412,6 +1428,54 @@ fn complete_turn(
     }
 }
 
+fn start_turn(
+    params: &Value,
+    pending_turn_starts: &Rc<RefCell<HashMap<acp::SessionId, async_channel::Sender<String>>>>,
+) {
+    let Some(thread_id) = params.get("threadId").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(turn_id) = params
+        .get("turn")
+        .and_then(|turn| turn.get("id"))
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    let session_id = acp::SessionId::new(thread_id.to_owned());
+    if let Some(sender) = pending_turn_starts.borrow_mut().remove(&session_id) {
+        sender.try_send(turn_id.to_owned()).log_err();
+    }
+}
+
+fn watch_next_native_turn_start(
+    session_id: &acp::SessionId,
+    pending_turn_starts: &Rc<RefCell<HashMap<acp::SessionId, async_channel::Sender<String>>>>,
+) -> async_channel::Receiver<String> {
+    let (turn_started_tx, turn_started_rx) = async_channel::bounded(1);
+    pending_turn_starts
+        .borrow_mut()
+        .insert(session_id.clone(), turn_started_tx);
+    turn_started_rx
+}
+
+async fn wait_for_native_turn_start_with_timeout(
+    turn_started: async_channel::Receiver<String>,
+    cx: &mut AsyncApp,
+) -> Option<String> {
+    let timeout = cx
+        .background_executor()
+        .timer(NATIVE_TURN_START_TIMEOUT)
+        .fuse();
+    let turn_started = turn_started.recv().map(|result| result.ok()).fuse();
+    futures::pin_mut!(timeout);
+    futures::pin_mut!(turn_started);
+    futures::select_biased! {
+        turn_id = turn_started => turn_id,
+        _ = timeout => None,
+    }
+}
+
 async fn wait_for_native_turn(
     session_id: &acp::SessionId,
     turn_id: String,
@@ -1436,6 +1500,31 @@ async fn wait_for_native_turn(
         .recv()
         .await
         .unwrap_or(acp::StopReason::Cancelled)
+}
+
+fn show_goal_status(
+    session_id: &acp::SessionId,
+    sessions: &HashMap<acp::SessionId, CodexNativeSession>,
+    response: &Value,
+    cx: &mut AsyncApp,
+) -> Result<()> {
+    let Some(thread) = sessions
+        .get(session_id)
+        .map(|session| session.thread.clone())
+    else {
+        return Ok(());
+    };
+    let message = if let Some(goal) = response.get("goal") {
+        goal_message(goal)
+    } else {
+        "No active goal.".to_owned()
+    };
+    let update = acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+        acp::ContentBlock::Text(acp::TextContent::new(message)),
+    ));
+    thread
+        .update(cx, |thread, cx| thread.handle_session_update(update, cx))?
+        .map_err(anyhow::Error::from)
 }
 
 fn prompt_blocks_to_codex_input(blocks: Vec<acp::ContentBlock>) -> Result<Vec<Value>> {
@@ -1507,7 +1596,12 @@ fn native_slash_command(input: &[Value]) -> Result<Option<NativeSlashCommand>> {
 fn extract_native_slash_command(input: &[Value]) -> Option<(&str, &str)> {
     let text = input
         .first()
-        .and_then(|block| block.get("type").and_then(Value::as_str).zip(block.get("text")))
+        .and_then(|block| {
+            block
+                .get("type")
+                .and_then(Value::as_str)
+                .zip(block.get("text"))
+        })
         .and_then(|(block_type, text)| {
             if block_type == "text" {
                 text.as_str()
@@ -1534,9 +1628,11 @@ async fn run_native_slash_command(
     client: &CodexAppServerClient,
     session_id: &acp::SessionId,
     sessions: &Rc<RefCell<HashMap<acp::SessionId, CodexNativeSession>>>,
+    pending_turn_starts: &Rc<RefCell<HashMap<acp::SessionId, async_channel::Sender<String>>>>,
     pending_turns: &Rc<RefCell<HashMap<String, async_channel::Sender<acp::StopReason>>>>,
     completed_turns: &Rc<RefCell<HashMap<String, acp::StopReason>>>,
     command: NativeSlashCommand,
+    cx: &mut AsyncApp,
 ) -> Result<acp::PromptResponse> {
     match command {
         NativeSlashCommand::Review { target } => {
@@ -1557,30 +1653,53 @@ async fn run_native_slash_command(
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
                 .context("Codex review/start response did not include turn.id")?;
-            let stop_reason =
-                wait_for_native_turn(session_id, turn_id, sessions, pending_turns, completed_turns)
-                    .await;
+            let stop_reason = wait_for_native_turn(
+                session_id,
+                turn_id,
+                sessions,
+                pending_turns,
+                completed_turns,
+            )
+            .await;
             return Ok(acp::PromptResponse::new(stop_reason));
         }
         NativeSlashCommand::Compact => {
-            client
+            let turn_started = watch_next_native_turn_start(session_id, pending_turn_starts);
+            if let Err(error) = client
                 .send_request(
                     "thread/compact/start",
                     json!({ "threadId": session_id.to_string() }),
                 )
                 .await
-                .context("failed to start native Codex compaction")?;
+            {
+                pending_turn_starts.borrow_mut().remove(session_id);
+                return Err(error).context("failed to start native Codex compaction");
+            }
+            if let Some(turn_id) = wait_for_native_turn_start_with_timeout(turn_started, cx).await {
+                let stop_reason = wait_for_native_turn(
+                    session_id,
+                    turn_id,
+                    sessions,
+                    pending_turns,
+                    completed_turns,
+                )
+                .await;
+                return Ok(acp::PromptResponse::new(stop_reason));
+            }
+            pending_turn_starts.borrow_mut().remove(session_id);
         }
         NativeSlashCommand::Goal(command) => {
             let params = match command {
                 GoalCommand::Status => {
-                    client
+                    let response = client
                         .send_request(
                             "thread/goal/get",
                             json!({ "threadId": session_id.to_string() }),
                         )
-                .await
-                .context("failed to read native Codex goal")?;
+                        .await
+                        .context("failed to read native Codex goal")?;
+                    show_goal_status(session_id, &sessions.borrow(), &response, cx)
+                        .context("failed to show native Codex goal")?;
                     return Ok(acp::PromptResponse::new(acp::StopReason::EndTurn));
                 }
                 GoalCommand::Clear => {
@@ -2236,13 +2355,53 @@ mod tests {
         match &updates[0].1 {
             acp::SessionUpdate::AgentMessageChunk(chunk) => match &chunk.content {
                 acp::ContentBlock::Text(text) => {
-                    assert!(text.text.contains("Goal (active)"));
+                    assert!(text.text.contains("Goal updated (active):"));
                     assert!(text.text.contains("finish native Codex"));
                 }
                 other => panic!("unexpected content block: {other:?}"),
             },
             other => panic!("unexpected update: {other:?}"),
         }
+    }
+
+    #[test]
+    fn formats_missing_goal_status() {
+        assert_eq!(
+            goal_message(&json!({
+                "objective": "finish native Codex",
+                "status": "paused",
+                "tokensUsed": 10,
+                "tokenBudget": 50
+            })),
+            "Goal updated (paused): finish native Codex\nTokens used: 10\nToken budget: 50"
+        );
+    }
+
+    #[gpui::test]
+    async fn waits_for_turn_started_notification(cx: &mut gpui::TestAppContext) {
+        let pending_turn_starts = Rc::new(RefCell::new(HashMap::new()));
+        let session_id = acp::SessionId::new("thread-1");
+        let turn_start = watch_next_native_turn_start(&session_id, &pending_turn_starts);
+        start_turn(
+            &json!({
+                "threadId": "thread-1",
+                "turn": {
+                    "id": "turn-1"
+                }
+            }),
+            &pending_turn_starts,
+        );
+        assert_eq!(turn_start.recv().await.ok().as_deref(), Some("turn-1"));
+        assert!(!pending_turn_starts.borrow().contains_key(&session_id));
+
+        let turn_start = watch_next_native_turn_start(&session_id, &pending_turn_starts);
+        let turn_id = cx
+            .update(|cx| {
+                let mut cx = cx.to_async();
+                async move { wait_for_native_turn_start_with_timeout(turn_start, &mut cx).await }
+            })
+            .await;
+        assert_eq!(turn_id, None);
     }
 
     #[test]

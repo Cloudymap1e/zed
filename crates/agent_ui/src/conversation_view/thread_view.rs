@@ -6,7 +6,7 @@ use agent_client_protocol::schema as acp;
 use std::cell::RefCell;
 
 use crate::message_editor::SharedSessionCapabilities;
-use acp_thread::{ContentBlock, PlanEntry};
+use agent_thread::{ContentBlock, PlanEntry};
 use cloud_api_types::{SubmitAgentThreadFeedbackBody, SubmitAgentThreadFeedbackCommentsBody};
 use editor::actions::OpenExcerpts;
 
@@ -28,7 +28,7 @@ struct ThreadFeedbackState {
 impl ThreadFeedbackState {
     pub fn submit(
         &mut self,
-        thread: Entity<AcpThread>,
+        thread: Entity<AgentThread>,
         feedback: ThreadFeedback,
         window: &mut Window,
         cx: &mut App,
@@ -83,7 +83,7 @@ impl ThreadFeedbackState {
         .detach_and_log_err(cx);
     }
 
-    pub fn submit_comments(&mut self, thread: Entity<AcpThread>, cx: &mut App) {
+    pub fn submit_comments(&mut self, thread: Entity<AgentThread>, cx: &mut App) {
         let Some(telemetry) = thread.read(cx).connection().telemetry() else {
             return;
         };
@@ -204,11 +204,11 @@ impl RenderOnce for GeneratingSpinnerElement {
     }
 }
 
-pub enum AcpThreadViewEvent {
+pub enum AgentThreadViewEvent {
     Interacted,
 }
 
-impl EventEmitter<AcpThreadViewEvent> for ThreadView {}
+impl EventEmitter<AgentThreadViewEvent> for ThreadView {}
 
 /// Tracks the user's permission dropdown selection state for a specific tool call.
 ///
@@ -263,7 +263,7 @@ impl PermissionSelection {
 pub struct ThreadView {
     pub session_id: acp::SessionId,
     pub parent_session_id: Option<acp::SessionId>,
-    pub thread: Entity<AcpThread>,
+    pub thread: Entity<AgentThread>,
     pub(crate) conversation: Entity<super::Conversation>,
     pub server_view: WeakEntity<ConversationView>,
     pub agent_icon: IconName,
@@ -282,7 +282,7 @@ pub struct ThreadView {
     pub(super) thread_error: Option<ThreadError>,
     pub thread_error_markdown: Option<Entity<Markdown>>,
     pub token_limit_callout_dismissed: bool,
-    pub last_token_limit_telemetry: Option<acp_thread::TokenUsageRatio>,
+    pub last_token_limit_telemetry: Option<agent_thread::TokenUsageRatio>,
     thread_feedback: ThreadFeedbackState,
     pub list_state: ListState,
     pub session_capabilities: SharedSessionCapabilities,
@@ -350,7 +350,7 @@ pub struct TurnFields {
 
 impl ThreadView {
     pub(crate) fn new(
-        thread: Entity<AcpThread>,
+        thread: Entity<AgentThread>,
         conversation: Entity<super::Conversation>,
         server_view: WeakEntity<ConversationView>,
         agent_icon: IconName,
@@ -623,14 +623,14 @@ impl ThreadView {
         &self,
         cx: &App,
     ) -> Option<Rc<agent::NativeAgentConnection>> {
-        let acp_thread = self.thread.read(cx);
-        acp_thread.connection().clone().downcast()
+        let agent_thread = self.thread.read(cx);
+        agent_thread.connection().clone().downcast()
     }
 
     pub fn as_native_thread(&self, cx: &App) -> Option<Entity<agent::Thread>> {
-        let acp_thread = self.thread.read(cx);
+        let agent_thread = self.thread.read(cx);
         self.as_native_connection(cx)?
-            .thread(acp_thread.session_id(), cx)
+            .thread(agent_thread.session_id(), cx)
     }
 
     /// Resolves the message editor's contents into content blocks. For profiles
@@ -875,12 +875,12 @@ impl ThreadView {
         };
 
         let kind = match ratio {
-            acp_thread::TokenUsageRatio::Normal => {
+            agent_thread::TokenUsageRatio::Normal => {
                 self.last_token_limit_telemetry = None;
                 return;
             }
-            acp_thread::TokenUsageRatio::Warning => "warning",
-            acp_thread::TokenUsageRatio::Exceeded => "exceeded",
+            agent_thread::TokenUsageRatio::Warning => "warning",
+            agent_thread::TokenUsageRatio::Exceeded => "exceeded",
         };
 
         let should_skip = self
@@ -934,7 +934,7 @@ impl ThreadView {
         }
 
         if is_generating {
-            cx.emit(AcpThreadViewEvent::Interacted);
+            cx.emit(AgentThreadViewEvent::Interacted);
             self.queue_message(message_editor, window, cx);
             return;
         }
@@ -976,7 +976,7 @@ impl ThreadView {
             }
         }
 
-        cx.emit(AcpThreadViewEvent::Interacted);
+        cx.emit(AgentThreadViewEvent::Interacted);
         self.send_impl(message_editor, window, cx)
     }
 
@@ -1179,7 +1179,7 @@ impl ThreadView {
             return;
         }
 
-        cx.emit(AcpThreadViewEvent::Interacted);
+        cx.emit(AgentThreadViewEvent::Interacted);
 
         let message_editor = self.message_editor.clone();
         if thread.read(cx).status() == ThreadStatus::Idle {
@@ -1343,7 +1343,7 @@ impl ThreadView {
         }
 
         let task = thread.update(cx, |thread, cx| thread.retry(cx));
-        cx.emit(AcpThreadViewEvent::Interacted);
+        cx.emit(AgentThreadViewEvent::Interacted);
         self.sync_generating_indicator(cx);
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -1382,7 +1382,7 @@ impl ThreadView {
             // If there are, we keep/accept them since we're not regenerating the prompt that created them.
             //
             // If editing the prompt that generated the edits, they are auto-rejected
-            // through the `rewind` function in the `acp_thread`.
+            // through the `rewind` function in the `agent_thread`.
             let has_earlier_edits = thread.read_with(cx, |thread, _| {
                 thread
                     .entries()
@@ -1403,7 +1403,7 @@ impl ThreadView {
                 .update(cx, |thread, cx| thread.rewind(user_message_id, cx))
                 .await?;
             this.update_in(cx, |thread, window, cx| {
-                cx.emit(AcpThreadViewEvent::Interacted);
+                cx.emit(AgentThreadViewEvent::Interacted);
                 thread.send_impl(message_editor, window, cx);
                 thread.focus_handle(cx).focus(window, cx);
             })?;
@@ -1420,7 +1420,7 @@ impl ThreadView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let is_idle = self.thread.read(cx).status() == acp_thread::ThreadStatus::Idle;
+        let is_idle = self.thread.read(cx).status() == agent_thread::ThreadStatus::Idle;
 
         if is_idle {
             self.send_impl(message_editor, window, cx);
@@ -1496,7 +1496,7 @@ impl ThreadView {
             return;
         };
 
-        cx.emit(AcpThreadViewEvent::Interacted);
+        cx.emit(AgentThreadViewEvent::Interacted);
 
         self.message_editor.focus_handle(cx).focus(window, cx);
 
@@ -1509,7 +1509,7 @@ impl ThreadView {
         // Stopped event from the newly sent message (which should trigger queue processing).
         if is_send_now {
             let is_generating =
-                self.thread.read(cx).status() == acp_thread::ThreadStatus::Generating;
+                self.thread.read(cx).status() == agent_thread::ThreadStatus::Generating;
             self.skip_queue_processing_count += if is_generating { 1 } else { 0 };
         }
 
@@ -3490,13 +3490,13 @@ impl ThreadView {
                 2
             };
             let label = match cost.source {
-                acp_thread::SessionCostSource::Reported => "Reported cost",
-                acp_thread::SessionCostSource::Estimated => "Estimated cost",
+                agent_thread::SessionCostSource::Reported => "Reported cost",
+                agent_thread::SessionCostSource::Estimated => "Estimated cost",
             };
             let value = format!("{:.prec$} {}", cost.amount, cost.currency, prec = precision);
             let description = match cost.source {
-                acp_thread::SessionCostSource::Reported => None,
-                acp_thread::SessionCostSource::Estimated => {
+                agent_thread::SessionCostSource::Reported => None,
+                agent_thread::SessionCostSource::Estimated => {
                     Some("Calculated from token usage and configured model pricing".to_string())
                 }
             };
@@ -4928,7 +4928,7 @@ impl ThreadView {
 
     fn render_thread_controls(
         &self,
-        thread: &Entity<AcpThread>,
+        thread: &Entity<AgentThread>,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let is_generating = matches!(thread.read(cx).status(), ThreadStatus::Generating);
@@ -5950,7 +5950,7 @@ impl ThreadView {
         &self,
         active_session_id: &acp::SessionId,
         entry_ix: usize,
-        terminal: &Entity<acp_thread::Terminal>,
+        terminal: &Entity<agent_thread::Terminal>,
         tool_call: &ToolCall,
         focus_handle: &FocusHandle,
         is_subagent: bool,
@@ -7618,7 +7618,7 @@ impl ThreadView {
     fn render_diff_editor(
         &self,
         entry_ix: usize,
-        diff: &Entity<acp_thread::Diff>,
+        diff: &Entity<agent_thread::Diff>,
         tool_call: &ToolCall,
         has_failed: bool,
         cx: &Context<Self>,
@@ -8231,7 +8231,7 @@ impl ThreadView {
         if matches!(status, ToolCallStatus::Failed) {
             tool_call.content.iter().find_map(|content| {
                 if let ToolCallContent::ContentBlock(block) = content {
-                    if let acp_thread::ContentBlock::Markdown { markdown } = block {
+                    if let agent_thread::ContentBlock::Markdown { markdown } = block {
                         let source = markdown.read(cx).source().to_string();
                         if !source.is_empty() {
                             if source == "User canceled" {
@@ -8802,13 +8802,13 @@ impl ThreadView {
         let ratio = token_usage.ratio();
 
         let (severity, icon, title) = match ratio {
-            acp_thread::TokenUsageRatio::Normal => return None,
-            acp_thread::TokenUsageRatio::Warning => (
+            agent_thread::TokenUsageRatio::Normal => return None,
+            agent_thread::TokenUsageRatio::Warning => (
                 Severity::Warning,
                 IconName::Warning,
                 "Thread reaching the token limit soon",
             ),
-            acp_thread::TokenUsageRatio::Exceeded => (
+            agent_thread::TokenUsageRatio::Exceeded => (
                 Severity::Error,
                 IconName::XCircle,
                 "Thread reached the token limit",

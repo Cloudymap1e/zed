@@ -8,9 +8,9 @@ use crate::{
     },
     mention_set::{Mention, MentionImage, MentionSet, insert_crease_for_mention},
 };
-use acp_thread::MentionUri;
 use agent::ThreadStore;
 use agent_client_protocol::schema as acp;
+use agent_thread::MentionUri;
 use anyhow::{Result, anyhow};
 use editor::{
     Addon, AnchorRangeExt, ContextMenuOptions, Editor, EditorElement, EditorEvent, EditorMode,
@@ -1009,7 +1009,7 @@ impl MessageEditor {
                     (selection.file_path, selection.line_range)
                 {
                     let crease_text =
-                        acp_thread::selection_name(Some(file_path.as_ref()), &line_range);
+                        agent_thread::selection_name(Some(file_path.as_ref()), &line_range);
 
                     let mention_uri = MentionUri::Selection {
                         abs_path: Some(file_path.clone()),
@@ -1908,9 +1908,9 @@ fn find_matching_bracket(text: &str, open: char, close: char) -> Option<usize> {
 mod tests {
     use std::{ops::Range, path::Path, path::PathBuf, sync::Arc};
 
-    use acp_thread::MentionUri;
     use agent::{ThreadStore, outline};
     use agent_client_protocol::schema as acp;
+    use agent_thread::MentionUri;
     use base64::Engine as _;
     use editor::{
         AnchorRangeExt as _, Editor, EditorMode, MultiBufferOffset, SelectionEffects,

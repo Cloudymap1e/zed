@@ -1,11 +1,11 @@
-use acp_thread::{
-    AgentConnection, AgentSessionInfo, AgentSessionList, AgentSessionListRequest,
-    AgentSessionListResponse,
-};
 use action_log::ActionLog;
 use agent_client_protocol::schema::{self as acp, ErrorCode};
 use agent_client_protocol::{
     Agent, Client, ConnectionTo, JsonRpcResponse, Lines, Responder, SentRequest,
+};
+use agent_thread::{
+    AgentConnection, AgentSessionInfo, AgentSessionList, AgentSessionListRequest,
+    AgentSessionListResponse,
 };
 use anyhow::anyhow;
 use async_channel;
@@ -35,8 +35,8 @@ use anyhow::{Context as _, Result};
 use gpui::{App, AppContext as _, AsyncApp, Entity, SharedString, Task, WeakEntity};
 use language_model::{LanguageModelCostInfo, TokenUsage};
 
-use acp_thread::{
-    AcpThread, AuthRequired, LoadError, SessionCost, SessionCostSource, SessionTokenUsageMeta,
+use agent_thread::{
+    AgentThread, AuthRequired, LoadError, SessionCost, SessionCostSource, SessionTokenUsageMeta,
     TerminalProviderEvent, session_token_usage_from_meta,
 };
 use terminal::TerminalBuilder;
@@ -411,7 +411,7 @@ pub struct AcpConnection {
 }
 
 struct PendingAcpSession {
-    task: Shared<Task<Result<Entity<AcpThread>, Arc<anyhow::Error>>>>,
+    task: Shared<Task<Result<Entity<AgentThread>, Arc<anyhow::Error>>>>,
     ref_count: usize,
 }
 
@@ -490,7 +490,7 @@ impl ConfigOptions {
 }
 
 pub struct AcpSession {
-    thread: WeakEntity<AcpThread>,
+    thread: WeakEntity<AgentThread>,
     suppress_abort_err: bool,
     models: Option<Rc<RefCell<acp::SessionModelState>>>,
     session_modes: Option<Rc<RefCell<acp::SessionModeState>>>,
@@ -500,8 +500,8 @@ pub struct AcpSession {
 
 pub struct AcpSessionList {
     connection: ConnectionTo<Agent>,
-    updates_tx: async_channel::Sender<acp_thread::SessionListUpdate>,
-    updates_rx: async_channel::Receiver<acp_thread::SessionListUpdate>,
+    updates_tx: async_channel::Sender<agent_thread::SessionListUpdate>,
+    updates_rx: async_channel::Receiver<agent_thread::SessionListUpdate>,
 }
 
 impl AcpSessionList {
@@ -516,13 +516,13 @@ impl AcpSessionList {
 
     fn notify_update(&self) {
         self.updates_tx
-            .try_send(acp_thread::SessionListUpdate::Refresh)
+            .try_send(agent_thread::SessionListUpdate::Refresh)
             .log_err();
     }
 
     fn send_info_update(&self, session_id: acp::SessionId, update: acp::SessionInfoUpdate) {
         self.updates_tx
-            .try_send(acp_thread::SessionListUpdate::SessionInfo { session_id, update })
+            .try_send(agent_thread::SessionListUpdate::SessionInfo { session_id, update })
             .log_err();
     }
 }
@@ -567,7 +567,7 @@ impl AgentSessionList for AcpSessionList {
     fn watch(
         &self,
         _cx: &mut App,
-    ) -> Option<async_channel::Receiver<acp_thread::SessionListUpdate>> {
+    ) -> Option<async_channel::Receiver<agent_thread::SessionListUpdate>> {
         Some(self.updates_rx.clone())
     }
 
@@ -1015,7 +1015,7 @@ impl AcpConnection {
             -> futures::future::LocalBoxFuture<'static, Result<SessionConfigResponse>>
         + 'static,
         cx: &mut App,
-    ) -> Task<Result<Entity<AcpThread>>> {
+    ) -> Task<Result<Entity<AgentThread>>> {
         // Check `pending_sessions` before `sessions` because the session is now
         // inserted into `sessions` before the load RPC completes (so that
         // notifications dispatched during history replay can find the thread).
@@ -1048,8 +1048,8 @@ impl AcpConnection {
                 let this = self.clone();
                 async move |cx| {
                     let action_log = cx.new(|_| ActionLog::new(project.clone()));
-                    let thread: Entity<AcpThread> = cx.new(|cx| {
-                        AcpThread::new(
+                    let thread: Entity<AgentThread> = cx.new(|cx| {
+                        AgentThread::new(
                             None,
                             title,
                             Some(work_dirs),
@@ -1284,7 +1284,7 @@ fn terminal_auth_task(
     agent_id: &AgentId,
     method: &acp::AuthMethodTerminal,
 ) -> SpawnInTerminal {
-    acp_thread::build_terminal_auth_task(
+    agent_thread::build_terminal_auth_task(
         terminal_auth_task_id(agent_id, &method.id),
         method.name.clone(),
         command.path.to_string_lossy().into_owned(),
@@ -1318,7 +1318,7 @@ fn meta_terminal_auth_task(
     let terminal_auth =
         serde_json::from_value::<MetaTerminalAuth>(meta.get("terminal-auth")?.clone()).ok()?;
 
-    Some(acp_thread::build_terminal_auth_task(
+    Some(agent_thread::build_terminal_auth_task(
         terminal_auth_task_id(agent_id, method_id),
         terminal_auth.label.clone(),
         terminal_auth.command,
@@ -1341,7 +1341,7 @@ impl AgentConnection for AcpConnection {
         project: Entity<Project>,
         work_dirs: PathList,
         cx: &mut App,
-    ) -> Task<Result<Entity<AcpThread>>> {
+    ) -> Task<Result<Entity<AgentThread>>> {
         // TODO: remove this once ACP supports multiple working directories
         let Some(cwd) = work_dirs.ordered_paths().next().cloned() else {
             return Task::ready(Err(anyhow!("Working directory cannot be empty")));
@@ -1477,8 +1477,8 @@ impl AgentConnection for AcpConnection {
             }
 
             let action_log = cx.new(|_| ActionLog::new(project.clone()));
-            let thread: Entity<AcpThread> = cx.new(|cx| {
-                AcpThread::new(
+            let thread: Entity<AgentThread> = cx.new(|cx| {
+                AgentThread::new(
                     None,
                     None,
                     Some(work_dirs),
@@ -1528,7 +1528,7 @@ impl AgentConnection for AcpConnection {
         work_dirs: PathList,
         title: Option<SharedString>,
         cx: &mut App,
-    ) -> Task<Result<Entity<AcpThread>>> {
+    ) -> Task<Result<Entity<AgentThread>>> {
         if !self.agent_capabilities.load_session {
             return Task::ready(Err(anyhow!(LoadError::Other(
                 "Loading sessions is not supported by this agent.".into()
@@ -1569,7 +1569,7 @@ impl AgentConnection for AcpConnection {
         work_dirs: PathList,
         title: Option<SharedString>,
         cx: &mut App,
-    ) -> Task<Result<Entity<AcpThread>>> {
+    ) -> Task<Result<Entity<AgentThread>>> {
         if self
             .agent_capabilities
             .session_capabilities
@@ -1734,7 +1734,7 @@ impl AgentConnection for AcpConnection {
 
     fn prompt(
         &self,
-        _id: acp_thread::UserMessageId,
+        _id: agent_thread::UserMessageId,
         params: acp::PromptRequest,
         cx: &mut App,
     ) -> Task<Result<acp::PromptResponse>> {
@@ -1805,7 +1805,7 @@ impl AgentConnection for AcpConnection {
         &self,
         session_id: &acp::SessionId,
         _cx: &App,
-    ) -> Option<Rc<dyn acp_thread::AgentSessionModes>> {
+    ) -> Option<Rc<dyn agent_thread::AgentSessionModes>> {
         let sessions = self.sessions.clone();
         let sessions_ref = sessions.borrow();
         let Some(session) = sessions_ref.get(session_id) else {
@@ -1826,7 +1826,7 @@ impl AgentConnection for AcpConnection {
     fn model_selector(
         &self,
         session_id: &acp::SessionId,
-    ) -> Option<Rc<dyn acp_thread::AgentModelSelector>> {
+    ) -> Option<Rc<dyn agent_thread::AgentModelSelector>> {
         let sessions = self.sessions.clone();
         let sessions_ref = sessions.borrow();
         let Some(session) = sessions_ref.get(session_id) else {
@@ -1849,7 +1849,7 @@ impl AgentConnection for AcpConnection {
         &self,
         session_id: &acp::SessionId,
         _cx: &App,
-    ) -> Option<Rc<dyn acp_thread::AgentSessionConfigOptions>> {
+    ) -> Option<Rc<dyn agent_thread::AgentSessionConfigOptions>> {
         let sessions = self.sessions.borrow();
         let session = sessions.get(session_id)?;
 
@@ -1892,7 +1892,7 @@ fn map_acp_error(err: acp::Error) -> anyhow::Error {
 pub mod test_support {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    use acp_thread::{
+    use agent_thread::{
         AgentModelSelector, AgentSessionConfigOptions, AgentSessionModes, AgentSessionRetry,
         AgentSessionSetTitle, AgentSessionTruncate, AgentTelemetry, UserMessageId,
     };
@@ -2021,7 +2021,7 @@ pub mod test_support {
             project: Entity<Project>,
             work_dirs: PathList,
             cx: &mut App,
-        ) -> Task<Result<Entity<AcpThread>>> {
+        ) -> Task<Result<Entity<AgentThread>>> {
             self.inner.clone().new_session(project, work_dirs, cx)
         }
 
@@ -2036,7 +2036,7 @@ pub mod test_support {
             work_dirs: PathList,
             title: Option<SharedString>,
             cx: &mut App,
-        ) -> Task<Result<Entity<AcpThread>>> {
+        ) -> Task<Result<Entity<AgentThread>>> {
             self.inner
                 .clone()
                 .load_session(session_id, project, work_dirs, title, cx)
@@ -2065,7 +2065,7 @@ pub mod test_support {
             work_dirs: PathList,
             title: Option<SharedString>,
             cx: &mut App,
-        ) -> Task<Result<Entity<AcpThread>>> {
+        ) -> Task<Result<Entity<AgentThread>>> {
             self.inner
                 .clone()
                 .resume_session(session_id, project, work_dirs, title, cx)
@@ -2723,7 +2723,7 @@ mod tests {
         assert_eq!(
             first_thread.entity_id(),
             second_thread.entity_id(),
-            "concurrent loads for the same session should share one AcpThread"
+            "concurrent loads for the same session should share one AgentThread"
         );
         assert_eq!(
             load_count.load(Ordering::SeqCst),
@@ -2818,10 +2818,10 @@ mod tests {
                 .entries()
                 .iter()
                 .map(|entry| match entry {
-                    acp_thread::AgentThreadEntry::UserMessage(_) => "user",
-                    acp_thread::AgentThreadEntry::AssistantMessage(_) => "assistant",
-                    acp_thread::AgentThreadEntry::ToolCall(_) => "tool_call",
-                    acp_thread::AgentThreadEntry::CompletedPlan(_) => "plan",
+                    agent_thread::AgentThreadEntry::UserMessage(_) => "user",
+                    agent_thread::AgentThreadEntry::AssistantMessage(_) => "assistant",
+                    agent_thread::AgentThreadEntry::ToolCall(_) => "tool_call",
+                    agent_thread::AgentThreadEntry::CompletedPlan(_) => "plan",
                 })
                 .collect::<Vec<_>>()
         });
@@ -3007,7 +3007,7 @@ mod tests {
         assert_eq!(
             first_thread.entity_id(),
             second_thread.entity_id(),
-            "concurrent loads should share one AcpThread"
+            "concurrent loads should share one AgentThread"
         );
         assert!(
             connection.sessions.borrow().contains_key(&session_id),
@@ -3087,7 +3087,7 @@ mod tests {
                 .category(acp::SessionConfigOptionCategory::Model),
             ])),
             acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(1_500, 10_000).meta(
-                acp_thread::meta_with_session_token_usage(acp_thread::SessionTokenUsageMeta {
+                agent_thread::meta_with_session_token_usage(agent_thread::SessionTokenUsageMeta {
                     input_tokens: 1_000,
                     output_tokens: 500,
                     cache_read_input_tokens: 0,
@@ -3175,8 +3175,8 @@ mod tests {
             ])),
             acp::SessionUpdate::UsageUpdate(
                 acp::UsageUpdate::new(1_500, 10_000)
-                    .meta(acp_thread::meta_with_session_token_usage(
-                        acp_thread::SessionTokenUsageMeta {
+                    .meta(agent_thread::meta_with_session_token_usage(
+                        agent_thread::SessionTokenUsageMeta {
                             input_tokens: 1_000,
                             output_tokens: 500,
                             cache_read_input_tokens: 0,
@@ -3259,7 +3259,7 @@ mod tests {
                 .category(acp::SessionConfigOptionCategory::Model),
             ])),
             acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(1_500, 10_000).meta(
-                acp_thread::meta_with_session_token_usage(acp_thread::SessionTokenUsageMeta {
+                agent_thread::meta_with_session_token_usage(agent_thread::SessionTokenUsageMeta {
                     input_tokens: 1_000,
                     output_tokens: 500,
                     cache_read_input_tokens: 0,
@@ -3357,7 +3357,7 @@ mod tests {
                 .category(acp::SessionConfigOptionCategory::Model),
             ])),
             acp::SessionUpdate::UsageUpdate(acp::UsageUpdate::new(1_500, 10_000).meta(
-                acp_thread::meta_with_session_token_usage(acp_thread::SessionTokenUsageMeta {
+                agent_thread::meta_with_session_token_usage(agent_thread::SessionTokenUsageMeta {
                     input_tokens: 1_000,
                     output_tokens: 500,
                     cache_read_input_tokens: 0,
@@ -3577,7 +3577,7 @@ struct AcpSessionModes {
     state: Rc<RefCell<acp::SessionModeState>>,
 }
 
-impl acp_thread::AgentSessionModes for AcpSessionModes {
+impl agent_thread::AgentSessionModes for AcpSessionModes {
     fn current_mode(&self) -> acp::SessionModeId {
         self.state.borrow().current_mode_id.clone()
     }
@@ -3636,15 +3636,15 @@ impl AcpModelSelector {
     }
 }
 
-impl acp_thread::AgentModelSelector for AcpModelSelector {
-    fn list_models(&self, _cx: &mut App) -> Task<Result<acp_thread::AgentModelList>> {
-        Task::ready(Ok(acp_thread::AgentModelList::Flat(
+impl agent_thread::AgentModelSelector for AcpModelSelector {
+    fn list_models(&self, _cx: &mut App) -> Task<Result<agent_thread::AgentModelList>> {
+        Task::ready(Ok(agent_thread::AgentModelList::Flat(
             self.state
                 .borrow()
                 .available_models
                 .clone()
                 .into_iter()
-                .map(acp_thread::AgentModelInfo::from)
+                .map(agent_thread::AgentModelInfo::from)
                 .collect(),
         )))
     }
@@ -3687,7 +3687,7 @@ impl acp_thread::AgentModelSelector for AcpModelSelector {
         })
     }
 
-    fn selected_model(&self, _cx: &mut App) -> Task<Result<acp_thread::AgentModelInfo>> {
+    fn selected_model(&self, _cx: &mut App) -> Task<Result<agent_thread::AgentModelInfo>> {
         let state = self.state.borrow();
         Task::ready(
             state
@@ -3695,7 +3695,7 @@ impl acp_thread::AgentModelSelector for AcpModelSelector {
                 .iter()
                 .find(|m| m.model_id == state.current_model_id)
                 .cloned()
-                .map(acp_thread::AgentModelInfo::from)
+                .map(agent_thread::AgentModelInfo::from)
                 .ok_or_else(|| anyhow::anyhow!("Model not found")),
         )
     }
@@ -3710,7 +3710,7 @@ struct AcpSessionConfigOptions {
     usage_estimators: Rc<RefCell<HashMap<acp::SessionId, AcpSessionUsageEstimator>>>,
 }
 
-impl acp_thread::AgentSessionConfigOptions for AcpSessionConfigOptions {
+impl agent_thread::AgentSessionConfigOptions for AcpSessionConfigOptions {
     fn config_options(&self) -> Vec<acp::SessionConfigOption> {
         self.state.borrow().clone()
     }
@@ -3760,7 +3760,7 @@ impl acp_thread::AgentSessionConfigOptions for AcpSessionConfigOptions {
 fn session_thread(
     ctx: &ClientContext,
     session_id: &acp::SessionId,
-) -> Result<WeakEntity<AcpThread>, acp::Error> {
+) -> Result<WeakEntity<AgentThread>, acp::Error> {
     let sessions = ctx.sessions.borrow();
     sessions
         .get(session_id)
@@ -3796,7 +3796,7 @@ fn handle_request_permission(
                 .update(cx, |thread, cx| {
                     thread.request_tool_call_authorization(
                         args.tool_call,
-                        acp_thread::PermissionOptions::Flat(args.options),
+                        agent_thread::PermissionOptions::Flat(args.options),
                         cx,
                     )
                 })
@@ -3990,7 +3990,7 @@ fn handle_session_notification(
         &notification.update,
     );
 
-    // Forward the update to the acp_thread as usual.
+    // Forward the update to the agent_thread as usual.
     if let Err(err) = thread
         .update(cx, |thread, cx| {
             thread.handle_session_update(notification.update.clone(), cx)?;
@@ -4091,7 +4091,7 @@ fn handle_create_terminal(
 
     cx.spawn(async move |cx| {
         let result: Result<_, acp::Error> = async {
-            let terminal_entity = acp_thread::create_terminal_entity(
+            let terminal_entity = agent_thread::create_terminal_entity(
                 args.command.clone(),
                 &args.args,
                 args.env

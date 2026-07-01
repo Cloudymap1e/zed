@@ -1,6 +1,6 @@
 use crate::{AgentServer, AgentServerDelegate};
-use acp_thread::{AcpThread, AgentThreadEntry, ToolCall, ToolCallStatus};
 use agent_client_protocol::schema as acp;
+use agent_thread::{AgentThread, AgentThreadEntry, ToolCall, ToolCallStatus};
 use client::RefreshLlmTokenListener;
 use futures::{FutureExt, StreamExt, channel::mpsc, select};
 use gpui::AppContext;
@@ -209,7 +209,7 @@ pub async fn test_tool_call_with_permission<T, F>(
     thread.update(cx, |thread, cx| {
         thread.authorize_tool_call(
             tool_call_id,
-            acp_thread::SelectedPermissionOutcome::new(
+            agent_thread::SelectedPermissionOutcome::new(
                 allow_option_id,
                 acp::PermissionOptionKind::AllowOnce,
             ),
@@ -434,7 +434,7 @@ pub async fn new_test_thread(
     project: Entity<Project>,
     current_dir: impl AsRef<Path>,
     cx: &mut TestAppContext,
-) -> Entity<AcpThread> {
+) -> Entity<AgentThread> {
     let store = project.read_with(cx, |project, _| project.agent_server_store().clone());
     let delegate = AgentServerDelegate::new(store, None);
 
@@ -451,7 +451,7 @@ pub async fn new_test_thread(
 }
 
 pub async fn run_until_first_tool_call(
-    thread: &Entity<AcpThread>,
+    thread: &Entity<AgentThread>,
     wait_until: impl Fn(&AgentThreadEntry) -> bool + 'static,
     cx: &mut TestAppContext,
 ) -> usize {

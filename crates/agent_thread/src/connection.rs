@@ -1,4 +1,4 @@
-use crate::AcpThread;
+use crate::AgentThread;
 use agent_client_protocol::schema as acp;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -54,7 +54,7 @@ pub trait AgentConnection {
         project: Entity<Project>,
         _work_dirs: PathList,
         cx: &mut App,
-    ) -> Task<Result<Entity<AcpThread>>>;
+    ) -> Task<Result<Entity<AgentThread>>>;
 
     /// Whether this agent supports loading existing sessions.
     fn supports_load_session(&self) -> bool {
@@ -69,7 +69,7 @@ pub trait AgentConnection {
         _work_dirs: PathList,
         _title: Option<SharedString>,
         _cx: &mut App,
-    ) -> Task<Result<Entity<AcpThread>>> {
+    ) -> Task<Result<Entity<AgentThread>>> {
         Task::ready(Err(anyhow::Error::msg("Loading sessions is not supported")))
     }
 
@@ -100,7 +100,7 @@ pub trait AgentConnection {
         _work_dirs: PathList,
         _title: Option<SharedString>,
         _cx: &mut App,
-    ) -> Task<Result<Entity<AcpThread>>> {
+    ) -> Task<Result<Entity<AgentThread>>> {
         Task::ready(Err(anyhow::Error::msg(
             "Resuming sessions is not supported",
         )))
@@ -308,6 +308,18 @@ pub trait AgentSessionList {
 
     fn supports_delete(&self) -> bool {
         false
+    }
+
+    fn supports_archive(&self) -> bool {
+        false
+    }
+
+    fn archive_session(&self, _session_id: &acp::SessionId, _cx: &mut App) -> Task<Result<()>> {
+        Task::ready(Err(anyhow::anyhow!("archive_session not supported")))
+    }
+
+    fn unarchive_session(&self, _session_id: &acp::SessionId, _cx: &mut App) -> Task<Result<()>> {
+        Task::ready(Err(anyhow::anyhow!("unarchive_session not supported")))
     }
 
     fn delete_session(&self, _session_id: &acp::SessionId, _cx: &mut App) -> Task<Result<()>> {
@@ -621,7 +633,7 @@ impl PermissionOptions {
 
 #[cfg(feature = "test-support")]
 mod test_support {
-    //! Test-only stubs and helpers for acp_thread.
+    //! Test-only stubs and helpers for agent_thread.
     //!
     //! This module is gated by the `test-support` feature and is not included
     //! in production builds. It provides:
@@ -693,7 +705,7 @@ mod test_support {
     }
 
     struct Session {
-        thread: WeakEntity<AcpThread>,
+        thread: WeakEntity<AgentThread>,
         response_tx: Option<oneshot::Sender<acp::StopReason>>,
     }
 
@@ -749,10 +761,10 @@ mod test_support {
             work_dirs: PathList,
             title: Option<SharedString>,
             cx: &mut gpui::App,
-        ) -> Entity<AcpThread> {
+        ) -> Entity<AgentThread> {
             let action_log = cx.new(|_| ActionLog::new(project.clone()));
             let thread = cx.new(|cx| {
-                AcpThread::new(
+                AgentThread::new(
                     None,
                     title,
                     Some(work_dirs),
@@ -839,7 +851,7 @@ mod test_support {
             project: Entity<Project>,
             work_dirs: PathList,
             cx: &mut gpui::App,
-        ) -> Task<gpui::Result<Entity<AcpThread>>> {
+        ) -> Task<gpui::Result<Entity<AgentThread>>> {
             let session_id = acp::SessionId::new(StubSessionCounter::next(cx).to_string());
             let thread = self.create_session(session_id, project, work_dirs, None, cx);
             Task::ready(Ok(thread))
@@ -856,7 +868,7 @@ mod test_support {
             work_dirs: PathList,
             title: Option<SharedString>,
             cx: &mut App,
-        ) -> Task<Result<Entity<AcpThread>>> {
+        ) -> Task<Result<Entity<AgentThread>>> {
             if !self.supports_load_session {
                 return Task::ready(Err(anyhow::Error::msg("Loading sessions is not supported")));
             }

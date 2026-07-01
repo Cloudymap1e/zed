@@ -1,6 +1,6 @@
-use acp_thread::AgentSessionModes;
 use agent_client_protocol::schema as acp;
 use agent_servers::AgentServer;
+use agent_thread::AgentSessionModes;
 
 use fs::Fs;
 use gpui::{Context, Entity, WeakEntity, Window, prelude::*};

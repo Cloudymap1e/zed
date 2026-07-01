@@ -399,7 +399,7 @@ pub fn worktree_info_from_thread_paths<S: std::hash::BuildHasher>(
     infos
 }
 
-impl From<&ThreadMetadata> for acp_thread::AgentSessionInfo {
+impl From<&ThreadMetadata> for agent_thread::AgentSessionInfo {
     fn from(meta: &ThreadMetadata) -> Self {
         let session_id = meta
             .session_id
@@ -1695,10 +1695,10 @@ impl Column for ArchivedGitWorktree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acp_thread::StubAgentConnection;
     use action_log::ActionLog;
     use agent::DbThread;
     use agent_client_protocol::schema as acp;
+    use agent_thread::StubAgentConnection;
     use gpui::{TestAppContext, VisualTestContext};
     use project::FakeFs;
     use project::Project;
@@ -2596,7 +2596,7 @@ mod tests {
         });
         vcx.run_until_parked();
 
-        // Create a standalone subagent AcpThread (not wrapped in a
+        // Create a standalone subagent AgentThread (not wrapped in a
         // ConversationView). The ThreadMetadataStore only observes
         // ConversationView events, so this thread's events should
         // have no effect on sidebar metadata.
@@ -2604,7 +2604,7 @@ mod tests {
         let subagent_thread = cx.update(|cx| {
             let action_log = cx.new(|_| ActionLog::new(project.clone()));
             cx.new(|cx| {
-                acp_thread::AcpThread::new(
+                agent_thread::AgentThread::new(
                     Some(regular_session_id.clone()),
                     Some("Subagent Thread".into()),
                     None,

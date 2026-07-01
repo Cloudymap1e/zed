@@ -1,8 +1,8 @@
 use std::{cmp::Reverse, rc::Rc, sync::Arc};
 
-use acp_thread::{AgentModelIcon, AgentModelInfo, AgentModelList, AgentModelSelector};
 use agent_client_protocol::schema as acp;
 use agent_servers::AgentServer;
+use agent_thread::{AgentModelIcon, AgentModelInfo, AgentModelList, AgentModelSelector};
 
 use anyhow::Result;
 use collections::{HashSet, IndexMap};
@@ -538,10 +538,10 @@ mod tests {
         AgentModelList::Grouped(IndexMap::from_iter(grouped_models.into_iter().map(
             |(group, models)| {
                 (
-                    acp_thread::AgentModelGroupName(group.to_string().into()),
+                    agent_thread::AgentModelGroupName(group.to_string().into()),
                     models
                         .into_iter()
-                        .map(|model| acp_thread::AgentModelInfo {
+                        .map(|model| agent_thread::AgentModelInfo {
                             id: acp::ModelId::new(model.to_string()),
                             name: model.to_string().into(),
                             description: None,
@@ -756,7 +756,7 @@ mod tests {
     #[gpui::test]
     fn test_flat_model_list_with_favorites(_cx: &mut TestAppContext) {
         let models = AgentModelList::Flat(vec![
-            acp_thread::AgentModelInfo {
+            agent_thread::AgentModelInfo {
                 id: acp::ModelId::new("zed/claude".to_string()),
                 name: "Claude".into(),
                 description: None,
@@ -764,7 +764,7 @@ mod tests {
                 is_latest: false,
                 cost: None,
             },
-            acp_thread::AgentModelInfo {
+            agent_thread::AgentModelInfo {
                 id: acp::ModelId::new("zed/gemini".to_string()),
                 name: "Gemini".into(),
                 description: None,
@@ -806,7 +806,7 @@ mod tests {
     #[gpui::test]
     fn test_is_favorite_flag_set_correctly_in_entries(_cx: &mut TestAppContext) {
         let models = AgentModelList::Flat(vec![
-            acp_thread::AgentModelInfo {
+            agent_thread::AgentModelInfo {
                 id: acp::ModelId::new("favorite-model".to_string()),
                 name: "Favorite".into(),
                 description: None,
@@ -814,7 +814,7 @@ mod tests {
                 is_latest: false,
                 cost: None,
             },
-            acp_thread::AgentModelInfo {
+            agent_thread::AgentModelInfo {
                 id: acp::ModelId::new("regular-model".to_string()),
                 name: "Regular".into(),
                 description: None,

@@ -18,7 +18,7 @@ use editor::Editor;
 use fs::Fs;
 use fuzzy::{StringMatch, StringMatchCandidate};
 use gpui::{
-    AnyElement, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
+    AnyElement, App, AsyncApp, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
     ListState, Render, SharedString, Subscription, Task, WeakEntity, Window, list, prelude::*, px,
 };
 use itertools::Itertools as _;
@@ -39,8 +39,8 @@ use ui_input::ErasedEditor;
 use util::ResultExt;
 use util::paths::PathExt;
 use workspace::{
-    CloseWindow, ModalView, PathList, SerializedWorkspaceLocation, Workspace, WorkspaceDb,
-    WorkspaceId, resolve_worktree_workspaces,
+    CloseWindow, ModalView, PathList, SerializedWorkspaceLocation, Toast, Workspace, WorkspaceDb,
+    WorkspaceId, notifications::NotificationId, resolve_worktree_workspaces,
 };
 
 use zed_actions::agents_sidebar::FocusSidebarFilter;
@@ -401,6 +401,77 @@ impl ThreadsArchiveView {
 
     fn archive_thread(&mut self, thread_id: ThreadId, cx: &mut Context<Self>) {
         self.preserve_selection_on_next_update = true;
+        let Some(thread) = ThreadMetadataStore::global(cx)
+            .read(cx)
+            .entry(thread_id)
+            .cloned()
+        else {
+            return;
+        };
+        if thread.agent_id.as_ref() != agent_servers::CODEX_ID {
+            ThreadMetadataStore::global(cx)
+                .update(cx, |store, cx| store.archive(thread_id, None, cx));
+            return;
+        }
+        if let Some(session_id) = thread.session_id.clone()
+            && let Some(agent_connection_store) = self.agent_connection_store.upgrade()
+        {
+            let agent = Agent::from(thread.agent_id.clone());
+            let fs = <dyn Fs>::global(cx);
+            let task = agent_connection_store.update(cx, |store, cx| {
+                store
+                    .request_connection(
+                        agent.clone(),
+                        agent.server(fs, ThreadStore::global(cx)),
+                        cx,
+                    )
+                    .read(cx)
+                    .wait_for_connection()
+            });
+            let workspace = self.workspace.clone();
+            cx.spawn(async move |_this, cx| {
+                let Ok(state) = task.await else {
+                    show_archive_toast(
+                        workspace,
+                        "Failed to connect to Codex before archiving thread.".to_owned(),
+                        cx,
+                    );
+                    return anyhow::Ok(());
+                };
+                let task = cx.update(|cx| {
+                    if let Some(list) = state.connection.session_list(cx)
+                        && list.supports_archive()
+                    {
+                        Some(list.archive_session(&session_id, cx))
+                    } else {
+                        None
+                    }
+                });
+                if let Some(task) = task {
+                    match task.await {
+                        Ok(()) => cx.update(|cx| {
+                            ThreadMetadataStore::global(cx)
+                                .update(cx, |store, cx| store.archive(thread_id, None, cx));
+                        }),
+                        Err(error) => {
+                            show_archive_toast(
+                                workspace,
+                                format!("Failed to archive thread: {error:#}"),
+                                cx,
+                            );
+                        }
+                    }
+                } else {
+                    cx.update(|cx| {
+                        ThreadMetadataStore::global(cx)
+                            .update(cx, |store, cx| store.archive(thread_id, None, cx));
+                    });
+                }
+                Ok(())
+            })
+            .detach_and_log_err(cx);
+            return;
+        }
         ThreadMetadataStore::global(cx).update(cx, |store, cx| store.archive(thread_id, None, cx));
     }
 
@@ -437,10 +508,55 @@ impl ThreadsArchiveView {
             return;
         }
 
+        self.unarchive_native_session(&thread, cx);
         self.mark_restoring(&thread.thread_id, cx);
         self.selection = None;
         self.reset_filter_editor_text(window, cx);
         cx.emit(ThreadsArchiveViewEvent::Activate { thread });
+    }
+
+    fn unarchive_native_session(&self, thread: &ThreadMetadata, cx: &mut Context<Self>) {
+        if thread.agent_id.as_ref() != agent_servers::CODEX_ID {
+            return;
+        }
+        let Some(session_id) = thread.session_id.clone() else {
+            return;
+        };
+        let Some(agent_connection_store) = self.agent_connection_store.upgrade() else {
+            return;
+        };
+        let agent = Agent::from(thread.agent_id.clone());
+        let fs = <dyn Fs>::global(cx);
+        let task = agent_connection_store.update(cx, |store, cx| {
+            store
+                .request_connection(agent.clone(), agent.server(fs, ThreadStore::global(cx)), cx)
+                .read(cx)
+                .wait_for_connection()
+        });
+        let workspace = self.workspace.clone();
+        cx.spawn(async move |_this, cx| {
+            let state = task.await?;
+            let task = cx.update(|cx| {
+                if let Some(list) = state.connection.session_list(cx)
+                    && list.supports_archive()
+                {
+                    Some(list.unarchive_session(&session_id, cx))
+                } else {
+                    None
+                }
+            });
+            if let Some(task) = task
+                && let Err(error) = task.await
+            {
+                show_archive_toast(
+                    workspace,
+                    format!("Failed to unarchive thread: {error:#}"),
+                    cx,
+                );
+            }
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
     }
 
     fn show_project_picker_for_thread(
@@ -797,14 +913,67 @@ impl ThreadsArchiveView {
         agent: AgentId,
         cx: &mut Context<Self>,
     ) {
-        ThreadMetadataStore::global(cx).update(cx, |store, cx| store.delete(thread_id, cx));
+        let is_codex_agent = agent.as_ref() == agent_servers::CODEX_ID;
+        if !is_codex_agent {
+            ThreadMetadataStore::global(cx).update(cx, |store, cx| store.delete(thread_id, cx));
 
+            let agent = Agent::from(agent);
+
+            let Some(agent_connection_store) = self.agent_connection_store.upgrade() else {
+                return;
+            };
+            let fs = <dyn Fs>::global(cx);
+
+            let task = agent_connection_store.update(cx, |store, cx| {
+                store
+                    .request_connection(
+                        agent.clone(),
+                        agent.server(fs, ThreadStore::global(cx)),
+                        cx,
+                    )
+                    .read(cx)
+                    .wait_for_connection()
+            });
+            cx.spawn(async move |_this, cx| {
+                crate::thread_worktree_archive::cleanup_thread_archived_worktrees(thread_id, cx)
+                    .await;
+
+                let state = task.await?;
+                let task = cx.update(|cx| {
+                    if let Some(session_id) = &session_id {
+                        if let Some(list) = state.connection.session_list(cx) {
+                            list.delete_session(session_id, cx)
+                        } else {
+                            Task::ready(Ok(()))
+                        }
+                    } else {
+                        Task::ready(Ok(()))
+                    }
+                });
+                task.await
+            })
+            .detach_and_log_err(cx);
+            return;
+        }
         let agent = Agent::from(agent);
 
         let Some(agent_connection_store) = self.agent_connection_store.upgrade() else {
+            self.workspace
+                .update(cx, |workspace, cx| {
+                    workspace.show_toast(
+                        Toast::new(
+                            NotificationId::named("codex-delete-connect-failed".into()),
+                            "Failed to connect to Codex before deleting thread.",
+                        )
+                        .autohide(),
+                        cx,
+                    );
+                })
+                .log_err();
             return;
         };
         let fs = <dyn Fs>::global(cx);
+        let workspace = self.workspace.clone();
 
         let task = agent_connection_store.update(cx, |store, cx| {
             store
@@ -813,21 +982,58 @@ impl ThreadsArchiveView {
                 .wait_for_connection()
         });
         cx.spawn(async move |_this, cx| {
-            crate::thread_worktree_archive::cleanup_thread_archived_worktrees(thread_id, cx).await;
-
-            let state = task.await?;
+            let state = match task.await {
+                Ok(state) => state,
+                Err(error) => {
+                    show_archive_toast(
+                        workspace,
+                        format!("Failed to connect to Codex before deleting thread: {error:#}"),
+                        cx,
+                    );
+                    return Ok(());
+                }
+            };
             let task = cx.update(|cx| {
                 if let Some(session_id) = &session_id {
                     if let Some(list) = state.connection.session_list(cx) {
-                        list.delete_session(session_id, cx)
+                        if list.supports_delete() {
+                            Some(list.delete_session(session_id, cx))
+                        } else {
+                            None
+                        }
                     } else {
-                        Task::ready(Ok(()))
+                        None
                     }
                 } else {
-                    Task::ready(Ok(()))
+                    None
                 }
             });
-            task.await
+            let result = if let Some(task) = task {
+                task.await
+            } else {
+                Ok(())
+            };
+            match result {
+                Ok(()) => {
+                    crate::thread_worktree_archive::cleanup_thread_archived_worktrees(
+                        thread_id, cx,
+                    )
+                    .await;
+                    cx.update(|cx| {
+                        ThreadMetadataStore::global(cx)
+                            .update(cx, |store, cx| store.delete(thread_id, cx));
+                    });
+                    Ok(())
+                }
+                Err(error) => {
+                    show_archive_toast(
+                        workspace,
+                        format!("Failed to delete thread: {error:#}"),
+                        cx,
+                    );
+                    Err(error)
+                }
+            }
         })
         .detach_and_log_err(cx);
     }
@@ -1170,6 +1376,17 @@ impl Render for ProjectPickerModal {
             }))
             .child(self.picker.clone())
     }
+}
+
+fn show_archive_toast(workspace: WeakEntity<Workspace>, message: String, cx: &mut AsyncApp) {
+    workspace
+        .update(cx, |workspace, cx| {
+            workspace.show_toast(
+                Toast::new(NotificationId::named(message.clone().into()), message).autohide(),
+                cx,
+            );
+        })
+        .log_err();
 }
 
 enum ProjectPickerEntry {

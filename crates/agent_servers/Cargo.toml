@@ -6,7 +6,7 @@ publish.workspace = true
 license = "GPL-3.0-or-later"
 
 [features]
-test-support = ["acp_thread/test-support", "gpui/test-support", "project/test-support", "dep:env_logger", "client/test-support", "dep:gpui_tokio", "reqwest_client/test-support"]
+test-support = ["agent_thread/test-support", "gpui/test-support", "project/test-support", "dep:env_logger", "client/test-support", "dep:gpui_tokio", "reqwest_client/test-support"]
 e2e = []
 
 [lints]
@@ -17,15 +17,16 @@ path = "src/agent_servers.rs"
 doctest = false
 
 [dependencies]
-acp_thread.workspace = true
 action_log.workspace = true
 agent_settings.workspace = true
+agent_thread.workspace = true
 async-channel.workspace = true
 agent-client-protocol.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 client.workspace = true
 collections.workspace = true
+diffy = "0.4.2"
 env_logger = { workspace = true, optional = true }
 fs.workspace = true
 futures.workspace = true
@@ -64,7 +65,7 @@ env_logger.workspace = true
 fs.workspace = true
 
 indoc.workspace = true
-acp_thread = { workspace = true, features = ["test-support"] }
+agent_thread = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }
 gpui_tokio.workspace = true
 project = { workspace = true, features = ["test-support"] }

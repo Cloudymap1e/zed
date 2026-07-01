@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
-use acp_thread::{AgentConnection, LoadError};
 use agent_servers::AcpConnection;
 use agent_servers::{AgentServer, AgentServerDelegate};
+use agent_thread::{AgentConnection, LoadError};
 use anyhow::Result;
 use collections::HashMap;
 use futures::{FutureExt, future::Shared};

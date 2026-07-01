@@ -1,6 +1,6 @@
-use acp_thread::AgentSessionListRequest;
 use agent::ThreadStore;
 use agent_client_protocol::schema as acp;
+use agent_thread::AgentSessionListRequest;
 use chrono::Utc;
 use collections::HashSet;
 use db::kvp::Dismissable;
@@ -29,10 +29,11 @@ use crate::{
     thread_metadata_store::{ThreadId, ThreadMetadata, ThreadMetadataStore, WorktreePaths},
 };
 
-pub struct AcpThreadImportOnboarding;
+pub struct AgentThreadImportOnboarding;
+pub type AcpThreadImportOnboarding = AgentThreadImportOnboarding;
 pub struct CrossChannelImportOnboarding;
 
-impl AcpThreadImportOnboarding {
+impl AgentThreadImportOnboarding {
     pub fn dismissed(cx: &App) -> bool {
         <Self as Dismissable>::dismissed(cx)
     }
@@ -42,7 +43,7 @@ impl AcpThreadImportOnboarding {
     }
 }
 
-impl Dismissable for AcpThreadImportOnboarding {
+impl Dismissable for AgentThreadImportOnboarding {
     const KEY: &'static str = "dismissed-acp-thread-import";
 }
 
@@ -107,7 +108,7 @@ impl ThreadImportModal {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        AcpThreadImportOnboarding::dismiss(cx);
+        AgentThreadImportOnboarding::dismiss(cx);
 
         let agent_entries = agent_server_store
             .read(cx)
@@ -536,7 +537,7 @@ fn find_threads_to_import(
 async fn collect_all_sessions(
     agent_id: AgentId,
     remote_connection: Option<RemoteConnectionOptions>,
-    list: std::rc::Rc<dyn acp_thread::AgentSessionList>,
+    list: std::rc::Rc<dyn agent_thread::AgentSessionList>,
     cx: &mut gpui::AsyncApp,
 ) -> anyhow::Result<SessionByAgent> {
     let mut sessions = Vec::new();
@@ -564,7 +565,7 @@ async fn collect_all_sessions(
 struct SessionByAgent {
     agent_id: AgentId,
     remote_connection: Option<RemoteConnectionOptions>,
-    sessions: Vec<acp_thread::AgentSessionInfo>,
+    sessions: Vec<agent_thread::AgentSessionInfo>,
 }
 
 fn collect_importable_threads(
@@ -714,7 +715,7 @@ fn show_cross_channel_import_toast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acp_thread::AgentSessionInfo;
+    use agent_thread::AgentSessionInfo;
     use chrono::Utc;
     use gpui::TestAppContext;
     use std::path::Path;

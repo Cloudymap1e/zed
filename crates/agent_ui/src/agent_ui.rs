@@ -72,8 +72,8 @@ pub(crate) use mode_selector::ModeSelector;
 pub(crate) use model_selector::ModelSelector;
 pub(crate) use model_selector_popover::ModelSelectorPopover;
 pub use thread_import::{
-    AcpThreadImportOnboarding, CrossChannelImportOnboarding, ThreadImportModal,
-    channels_with_threads, import_threads_from_other_channels,
+    AcpThreadImportOnboarding, AgentThreadImportOnboarding, CrossChannelImportOnboarding,
+    ThreadImportModal, channels_with_threads, import_threads_from_other_channels,
 };
 use zed_actions;
 pub use zed_actions::{CreateWorktree, NewWorktreeBranchTarget, SwitchWorktree};

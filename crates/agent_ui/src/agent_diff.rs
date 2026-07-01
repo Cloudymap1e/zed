@@ -1,7 +1,7 @@
 use crate::{Keep, KeepAll, OpenAgentDiff, Reject, RejectAll};
-use acp_thread::{AcpThread, AcpThreadEvent};
 use action_log::{ActionLogTelemetry, LastRejectUndo};
 use agent_settings::AgentSettings;
+use agent_thread::{AgentThread, AgentThreadEvent};
 use anyhow::Result;
 use buffer_diff::DiffHunkStatus;
 use collections::{HashMap, HashSet};
@@ -41,7 +41,7 @@ use zed_actions::assistant::ToggleFocus;
 pub struct AgentDiffPane {
     multibuffer: Entity<MultiBuffer>,
     editor: Entity<SplittableEditor>,
-    thread: Entity<AcpThread>,
+    thread: Entity<AgentThread>,
     focus_handle: FocusHandle,
     workspace: WeakEntity<Workspace>,
     _subscriptions: Vec<Subscription>,
@@ -49,7 +49,7 @@ pub struct AgentDiffPane {
 
 impl AgentDiffPane {
     pub fn deploy(
-        thread: Entity<AcpThread>,
+        thread: Entity<AgentThread>,
         workspace: WeakEntity<Workspace>,
         window: &mut Window,
         cx: &mut App,
@@ -60,7 +60,7 @@ impl AgentDiffPane {
     }
 
     pub fn deploy_in_workspace(
-        thread: Entity<AcpThread>,
+        thread: Entity<AgentThread>,
         workspace: &mut Workspace,
         window: &mut Window,
         cx: &mut Context<Workspace>,
@@ -81,7 +81,7 @@ impl AgentDiffPane {
     }
 
     pub fn new(
-        thread: Entity<AcpThread>,
+        thread: Entity<AgentThread>,
         workspace: WeakEntity<Workspace>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -116,7 +116,7 @@ impl AgentDiffPane {
                     this.update_excerpts(window, cx)
                 }),
                 cx.subscribe(&thread, |this, _thread, event, cx| {
-                    this.handle_acp_thread_event(event, cx)
+                    this.handle_agent_thread_event(event, cx)
                 }),
             ],
             multibuffer,
@@ -237,8 +237,8 @@ impl AgentDiffPane {
         }
     }
 
-    fn handle_acp_thread_event(&mut self, event: &AcpThreadEvent, cx: &mut Context<Self>) {
-        if let AcpThreadEvent::TitleUpdated = event {
+    fn handle_agent_thread_event(&mut self, event: &AgentThreadEvent, cx: &mut Context<Self>) {
+        if let AgentThreadEvent::TitleUpdated = event {
             cx.emit(EditorEvent::TitleChanged);
         }
     }
@@ -315,7 +315,7 @@ impl AgentDiffPane {
 fn keep_edits_in_selection(
     editor: &mut Editor,
     buffer_snapshot: &MultiBufferSnapshot,
-    thread: &Entity<AcpThread>,
+    thread: &Entity<AgentThread>,
     window: &mut Window,
     cx: &mut Context<Editor>,
 ) {
@@ -330,7 +330,7 @@ fn keep_edits_in_selection(
 fn reject_edits_in_selection(
     editor: &mut Editor,
     buffer_snapshot: &MultiBufferSnapshot,
-    thread: &Entity<AcpThread>,
+    thread: &Entity<AgentThread>,
     workspace: WeakEntity<Workspace>,
     window: &mut Window,
     cx: &mut Context<Editor>,
@@ -353,7 +353,7 @@ fn reject_edits_in_selection(
 fn keep_edits_in_ranges(
     editor: &mut Editor,
     buffer_snapshot: &MultiBufferSnapshot,
-    thread: &Entity<AcpThread>,
+    thread: &Entity<AgentThread>,
     ranges: Vec<Range<editor::Anchor>>,
     window: &mut Window,
     cx: &mut Context<Editor>,
@@ -385,7 +385,7 @@ fn keep_edits_in_ranges(
 fn reject_edits_in_ranges(
     editor: &mut Editor,
     buffer_snapshot: &MultiBufferSnapshot,
-    thread: &Entity<AcpThread>,
+    thread: &Entity<AgentThread>,
     ranges: Vec<Range<editor::Anchor>>,
     workspace: WeakEntity<Workspace>,
     window: &mut Window,
@@ -717,7 +717,7 @@ impl Render for AgentDiffPane {
 }
 
 fn diff_hunk_controls(
-    thread: &Entity<AcpThread>,
+    thread: &Entity<AgentThread>,
     workspace: WeakEntity<Workspace>,
 ) -> editor::RenderDiffHunkControlsFn {
     let thread = thread.clone();
@@ -747,7 +747,7 @@ fn render_diff_hunk_controls(
     hunk_range: Range<editor::Anchor>,
     is_created_file: bool,
     line_height: Pixels,
-    thread: &Entity<AcpThread>,
+    thread: &Entity<AgentThread>,
     editor: &Entity<Editor>,
     workspace: WeakEntity<Workspace>,
     cx: &mut App,
@@ -1229,7 +1229,7 @@ pub enum EditorState {
 }
 
 struct WorkspaceThread {
-    thread: WeakEntity<AcpThread>,
+    thread: WeakEntity<AgentThread>,
     _thread_subscriptions: (Subscription, Subscription),
     singleton_editors: HashMap<WeakEntity<Buffer>, HashMap<WeakEntity<Editor>, Subscription>>,
     _settings_subscription: Subscription,
@@ -1254,7 +1254,7 @@ impl AgentDiff {
 
     pub fn set_active_thread(
         workspace: &WeakEntity<Workspace>,
-        thread: Entity<AcpThread>,
+        thread: Entity<AgentThread>,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -1266,7 +1266,7 @@ impl AgentDiff {
     fn register_active_thread_impl(
         &mut self,
         workspace: &WeakEntity<Workspace>,
-        thread: Entity<AcpThread>,
+        thread: Entity<AgentThread>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1282,7 +1282,7 @@ impl AgentDiff {
         let thread_subscription = cx.subscribe_in(&thread, window, {
             let workspace = workspace.clone();
             move |this, thread, event, window, cx| {
-                this.handle_acp_thread_event(&workspace, thread, event, window, cx)
+                this.handle_agent_thread_event(&workspace, thread, event, window, cx)
             }
         });
 
@@ -1363,7 +1363,7 @@ impl AgentDiff {
         workspace: &mut Workspace,
         review: impl Fn(
             &Entity<Editor>,
-            &Entity<AcpThread>,
+            &Entity<AgentThread>,
             &WeakEntity<Workspace>,
             &mut Window,
             &mut App,
@@ -1386,16 +1386,16 @@ impl AgentDiff {
         });
     }
 
-    fn handle_acp_thread_event(
+    fn handle_agent_thread_event(
         &mut self,
         workspace: &WeakEntity<Workspace>,
-        thread: &Entity<AcpThread>,
-        event: &AcpThreadEvent,
+        thread: &Entity<AgentThread>,
+        event: &AgentThreadEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         match event {
-            AcpThreadEvent::NewEntry => {
+            AgentThreadEvent::NewEntry => {
                 if thread
                     .read(cx)
                     .entries()
@@ -1405,7 +1405,7 @@ impl AgentDiff {
                     self.update_reviewing_editors(workspace, window, cx);
                 }
             }
-            AcpThreadEvent::EntryUpdated(ix) => {
+            AgentThreadEvent::EntryUpdated(ix) => {
                 if thread
                     .read(cx)
                     .entries()
@@ -1415,25 +1415,27 @@ impl AgentDiff {
                     self.update_reviewing_editors(workspace, window, cx);
                 }
             }
-            AcpThreadEvent::Stopped(_) => {
+            AgentThreadEvent::Stopped(_) => {
                 self.update_reviewing_editors(workspace, window, cx);
             }
-            AcpThreadEvent::Error | AcpThreadEvent::LoadError(_) | AcpThreadEvent::Refusal => {
+            AgentThreadEvent::Error
+            | AgentThreadEvent::LoadError(_)
+            | AgentThreadEvent::Refusal => {
                 self.update_reviewing_editors(workspace, window, cx);
             }
-            AcpThreadEvent::TitleUpdated
-            | AcpThreadEvent::TokenUsageUpdated
-            | AcpThreadEvent::SubagentSpawned(_)
-            | AcpThreadEvent::EntriesRemoved(_)
-            | AcpThreadEvent::ToolAuthorizationRequested(_)
-            | AcpThreadEvent::ToolAuthorizationReceived(_)
-            | AcpThreadEvent::PromptCapabilitiesUpdated
-            | AcpThreadEvent::AvailableCommandsUpdated(_)
-            | AcpThreadEvent::Retry(_)
-            | AcpThreadEvent::ModeUpdated(_)
-            | AcpThreadEvent::ConfigOptionsUpdated(_)
-            | AcpThreadEvent::WorkingDirectoriesUpdated
-            | AcpThreadEvent::PromptUpdated => {}
+            AgentThreadEvent::TitleUpdated
+            | AgentThreadEvent::TokenUsageUpdated
+            | AgentThreadEvent::SubagentSpawned(_)
+            | AgentThreadEvent::EntriesRemoved(_)
+            | AgentThreadEvent::ToolAuthorizationRequested(_)
+            | AgentThreadEvent::ToolAuthorizationReceived(_)
+            | AgentThreadEvent::PromptCapabilitiesUpdated
+            | AgentThreadEvent::AvailableCommandsUpdated(_)
+            | AgentThreadEvent::Retry(_)
+            | AgentThreadEvent::ModeUpdated(_)
+            | AgentThreadEvent::ConfigOptionsUpdated(_)
+            | AgentThreadEvent::WorkingDirectoriesUpdated
+            | AgentThreadEvent::PromptUpdated => {}
         }
     }
 
@@ -1654,7 +1656,7 @@ impl AgentDiff {
 
     fn keep_all(
         editor: &Entity<Editor>,
-        thread: &Entity<AcpThread>,
+        thread: &Entity<AgentThread>,
         _workspace: &WeakEntity<Workspace>,
         window: &mut Window,
         cx: &mut App,
@@ -1675,7 +1677,7 @@ impl AgentDiff {
 
     fn reject_all(
         editor: &Entity<Editor>,
-        thread: &Entity<AcpThread>,
+        thread: &Entity<AgentThread>,
         workspace: &WeakEntity<Workspace>,
         window: &mut Window,
         cx: &mut App,
@@ -1697,7 +1699,7 @@ impl AgentDiff {
 
     fn keep(
         editor: &Entity<Editor>,
-        thread: &Entity<AcpThread>,
+        thread: &Entity<AgentThread>,
         _workspace: &WeakEntity<Workspace>,
         window: &mut Window,
         cx: &mut App,
@@ -1711,7 +1713,7 @@ impl AgentDiff {
 
     fn reject(
         editor: &Entity<Editor>,
-        thread: &Entity<AcpThread>,
+        thread: &Entity<AgentThread>,
         workspace: &WeakEntity<Workspace>,
         window: &mut Window,
         cx: &mut App,
@@ -1737,7 +1739,7 @@ impl AgentDiff {
         workspace: &mut Workspace,
         review: impl Fn(
             &Entity<Editor>,
-            &Entity<AcpThread>,
+            &Entity<AgentThread>,
             &WeakEntity<Workspace>,
             &mut Window,
             &mut App,
@@ -1807,8 +1809,8 @@ impl editor::Addon for EditorAgentDiffAddon {
 mod tests {
     use super::*;
     use crate::Keep;
-    use acp_thread::AgentConnection as _;
     use agent_settings::AgentSettings;
+    use agent_thread::AgentConnection as _;
     use editor::EditorSettings;
     use gpui::{TestAppContext, UpdateGlobal, VisualTestContext};
     use project::{FakeFs, Project};
@@ -1846,7 +1848,7 @@ mod tests {
             })
             .unwrap();
 
-        let connection = Rc::new(acp_thread::StubAgentConnection::new());
+        let connection = Rc::new(agent_thread::StubAgentConnection::new());
         let thread = cx
             .update(|cx| {
                 connection.clone().new_session(
@@ -2039,7 +2041,7 @@ mod tests {
             }
         });
 
-        let connection = Rc::new(acp_thread::StubAgentConnection::new());
+        let connection = Rc::new(agent_thread::StubAgentConnection::new());
         let thread = cx
             .update(|_, cx| {
                 connection.clone().new_session(

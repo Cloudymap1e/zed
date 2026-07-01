@@ -1,6 +1,6 @@
 use crate::{AgentServer, AgentServerDelegate, load_proxy_env};
-use acp_thread::AgentConnection;
 use agent_client_protocol::schema as acp;
+use agent_thread::AgentConnection;
 use anyhow::{Context as _, Result};
 use collections::HashSet;
 use fs::Fs;
@@ -351,7 +351,7 @@ impl AgentServer for CustomAgentServer {
         let store = delegate.store.downgrade();
         cx.spawn(async move |cx| {
             if agent_id.as_ref() == CODEX_ID {
-                match crate::codex_native::connect(
+                return crate::codex_native::connect(
                     agent_id.clone(),
                     project.clone(),
                     default_model.clone(),
@@ -359,14 +359,7 @@ impl AgentServer for CustomAgentServer {
                     cx,
                 )
                 .await
-                {
-                    Ok(connection) => return Ok(connection),
-                    Err(error) => {
-                        log::warn!(
-                            "Native Codex app-server unavailable; falling back to codex-acp: {error:#}"
-                        );
-                    }
-                }
+                .context("Codex app-server connection failed");
             }
 
             if is_registry_agent && agent_id.as_ref() == GEMINI_ID {

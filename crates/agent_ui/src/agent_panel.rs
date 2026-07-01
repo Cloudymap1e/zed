@@ -8,10 +8,10 @@ use std::{
     time::Duration,
 };
 
-use acp_thread::{AcpThread, AcpThreadEvent, MentionUri, ThreadStatus};
 use agent::{ContextServerRegistry, SharedThread, ThreadStore};
 use agent_client_protocol::schema as acp;
 use agent_servers::AgentServer;
+use agent_thread::{AgentThread as AgentThreadModel, AgentThreadEvent, MentionUri, ThreadStatus};
 use collections::HashSet;
 use db::kvp::{Dismissable, KeyValueStore};
 use itertools::Itertools;
@@ -40,7 +40,7 @@ use crate::{
     ResetTrialEndUpsell, ResetTrialUpsell, ShowAllSidebarThreadMetadata, ShowThreadMetadata,
     ToggleNewThreadMenu, ToggleOptionsMenu,
     agent_configuration::{AgentConfiguration, AssistantConfigurationEvent},
-    conversation_view::{AcpThreadViewEvent, ThreadView},
+    conversation_view::{AgentThreadViewEvent, ThreadView},
     ui::EndTrialUpsell,
 };
 use crate::{
@@ -1267,11 +1267,11 @@ impl AgentPanel {
         conversation_view: &Entity<ConversationView>,
         cx: &mut Context<Self>,
     ) {
-        if let Some(acp_thread) = conversation_view.read(cx).root_thread(cx) {
+        if let Some(agent_thread) = conversation_view.read(cx).root_thread(cx) {
             self._draft_editor_observation = Some(cx.subscribe(
-                &acp_thread,
-                |this, _, e: &AcpThreadEvent, cx| {
-                    if let AcpThreadEvent::PromptUpdated = e {
+                &agent_thread,
+                |this, _, e: &AgentThreadEvent, cx| {
+                    if let AgentThreadEvent::PromptUpdated = e {
                         this.serialize(cx);
                     }
                 },
@@ -1911,7 +1911,7 @@ impl AgentPanel {
         server_view.read(cx).root_thread_view()
     }
 
-    pub fn active_agent_thread(&self, cx: &App) -> Option<Entity<AcpThread>> {
+    pub fn active_agent_thread(&self, cx: &App) -> Option<Entity<AgentThreadModel>> {
         match &self.base_view {
             BaseView::AgentThread { conversation_view } => {
                 conversation_view.read(cx).root_thread(cx)
@@ -2161,8 +2161,8 @@ impl AgentPanel {
             cx.subscribe_in(
                 &tv,
                 window,
-                |this, _view, event: &AcpThreadViewEvent, _window, cx| match event {
-                    AcpThreadViewEvent::Interacted => {
+                |this, _view, event: &AgentThreadViewEvent, _window, cx| match event {
+                    AgentThreadViewEvent::Interacted => {
                         let Some(thread_id) = this.active_thread_id(cx) else {
                             return;
                         };
@@ -2967,7 +2967,7 @@ impl AgentPanel {
                         .item(
                             ContextMenuEntry::new("Zed Agent")
                                 .when(is_agent_selected(Agent::NativeAgent), |this| {
-                                    this.action(Box::new(NewExternalAgentThread { agent: None }))
+                                    this.action(Box::new(NewThread))
                                 })
                                 .icon(IconName::ZedAgent)
                                 .icon_color(Color::Muted)
@@ -3049,11 +3049,7 @@ impl AgentPanel {
                                         is_agent_selected(Agent::Custom {
                                             id: item.id.clone(),
                                         }),
-                                        |this| {
-                                            this.action(Box::new(NewExternalAgentThread {
-                                                agent: None,
-                                            }))
-                                        },
+                                        |this| this.action(Box::new(NewThread)),
                                     )
                                     .icon_color(Color::Muted)
                                     .disabled(is_via_collab)
@@ -3757,8 +3753,8 @@ mod tests {
         active_session_id, active_thread_id, open_thread_with_connection,
         open_thread_with_custom_connection, send_message,
     };
-    use acp_thread::{AgentConnection, StubAgentConnection, ThreadStatus, UserMessageId};
     use action_log::ActionLog;
+    use agent_thread::{AgentConnection, StubAgentConnection, ThreadStatus, UserMessageId};
     use anyhow::{Result, anyhow};
     use feature_flags::FeatureFlagAppExt;
     use fs::FakeFs;
@@ -3791,12 +3787,12 @@ mod tests {
             work_dirs: PathList,
             title: Option<SharedString>,
             cx: &mut App,
-        ) -> Entity<AcpThread> {
+        ) -> Entity<AgentThreadModel> {
             self.sessions.lock().insert(session_id.clone());
 
             let action_log = cx.new(|_| ActionLog::new(project.clone()));
             cx.new(|cx| {
-                AcpThread::new(
+                AgentThreadModel::new(
                     None,
                     title,
                     Some(work_dirs),
@@ -3830,7 +3826,7 @@ mod tests {
             project: Entity<Project>,
             work_dirs: PathList,
             cx: &mut App,
-        ) -> Task<Result<Entity<AcpThread>>> {
+        ) -> Task<Result<Entity<AgentThreadModel>>> {
             let session_id = {
                 let mut next_session_number = self.next_session_number.lock();
                 let session_id = acp::SessionId::new(format!(
@@ -3855,7 +3851,7 @@ mod tests {
             work_dirs: PathList,
             title: Option<SharedString>,
             cx: &mut App,
-        ) -> Task<Result<Entity<AcpThread>>> {
+        ) -> Task<Result<Entity<AgentThreadModel>>> {
             let thread = self.create_session(session_id, project, work_dirs, title, cx);
             thread.update(cx, |thread, cx| {
                 thread
@@ -4177,7 +4173,7 @@ mod tests {
         });
         cx.run_until_parked();
 
-        // Sanity: the view couldn't connect, so no live AcpThread exists.
+        // Sanity: the view couldn't connect, so no live AgentThread exists.
         panel.read_with(cx, |panel, cx| {
             assert!(
                 panel.active_agent_thread(cx).is_none(),
@@ -6465,12 +6461,12 @@ mod tests {
             work_dirs: PathList,
             title: Option<SharedString>,
             cx: &mut App,
-        ) -> Entity<AcpThread> {
+        ) -> Entity<AgentThreadModel> {
             self.sessions.lock().insert(session_id.clone());
 
             let action_log = cx.new(|_| ActionLog::new(project.clone()));
             cx.new(|cx| {
-                AcpThread::new(
+                AgentThreadModel::new(
                     None,
                     title,
                     Some(work_dirs),
@@ -6504,7 +6500,7 @@ mod tests {
             project: Entity<Project>,
             work_dirs: PathList,
             cx: &mut App,
-        ) -> Task<Result<Entity<AcpThread>>> {
+        ) -> Task<Result<Entity<AgentThreadModel>>> {
             let session_id = {
                 let mut next_session_number = self.next_session_number.lock();
                 let session_id = acp::SessionId::new(format!(
@@ -6529,7 +6525,7 @@ mod tests {
             work_dirs: PathList,
             title: Option<SharedString>,
             cx: &mut App,
-        ) -> Task<Result<Entity<AcpThread>>> {
+        ) -> Task<Result<Entity<AgentThreadModel>>> {
             let thread = self.create_session(session_id, project, work_dirs, title, cx);
             thread.update(cx, |thread, cx| {
                 thread

@@ -6,8 +6,8 @@ use std::sync::atomic::AtomicBool;
 
 use crate::DEFAULT_THREAD_TITLE;
 use crate::thread_metadata_store::{ThreadMetadata, ThreadMetadataStore};
-use acp_thread::MentionUri;
 use agent_client_protocol::schema as acp;
+use agent_thread::MentionUri;
 use anyhow::Result;
 use editor::{CompletionProvider, Editor, code_context_menus::COMPLETION_MENU_MAX_WIDTH};
 use futures::FutureExt as _;
@@ -2024,7 +2024,7 @@ fn collect_session_matches(cx: &App) -> Vec<SessionMatch> {
     entries
         .into_iter()
         .map(|metadata| {
-            let info = acp_thread::AgentSessionInfo::from(metadata);
+            let info = agent_thread::AgentSessionInfo::from(metadata);
             SessionMatch {
                 session_id: info.session_id,
                 title: session_title(info.title),

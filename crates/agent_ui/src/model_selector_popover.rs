@@ -1,7 +1,7 @@
 use std::rc::Rc;
 use std::sync::Arc;
 
-use acp_thread::{AgentModelIcon, AgentModelInfo, AgentModelSelector};
+use agent_thread::{AgentModelIcon, AgentModelInfo, AgentModelSelector};
 use fs::Fs;
 use gpui::{Entity, FocusHandle};
 use picker::popover_menu::PickerPopoverMenu;

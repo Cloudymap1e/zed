@@ -1,6 +1,6 @@
-use acp_thread::{AgentConnection, StubAgentConnection};
 use agent_client_protocol::schema as acp;
 use agent_servers::{AgentServer, AgentServerDelegate};
+use agent_thread::{AgentConnection, StubAgentConnection};
 use gpui::{Entity, Task, TestAppContext, VisualTestContext};
 use project::AgentId;
 use project::Project;
@@ -98,7 +98,7 @@ pub fn init_test(cx: &mut TestAppContext) {
     cx.update(|cx| {
         let settings_store = SettingsStore::test(cx);
         cx.set_global(settings_store);
-        cx.set_global(acp_thread::StubSessionCounter(
+        cx.set_global(agent_thread::StubSessionCounter(
             std::sync::atomic::AtomicUsize::new(0),
         ));
         theme_settings::init(theme::LoadThemes::JustBase, cx);

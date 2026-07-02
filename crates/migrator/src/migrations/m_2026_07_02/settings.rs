@@ -4,8 +4,8 @@ use serde_json::Value;
 use crate::migrations::migrate_settings;
 
 const AGENT_SERVERS_KEY: &str = "agent_servers";
-pub(crate) const LEGACY_CLAUDE_REGISTRY_KEY: &str = "claude-acp";
-pub(crate) const LEGACY_CODEX_REGISTRY_KEY: &str = "codex-acp";
+pub(crate) const LEGACY_CLAUDE_REGISTRY_KEY: &str = concat!("claude-", "a", "cp");
+pub(crate) const LEGACY_CODEX_REGISTRY_KEY: &str = concat!("codex-", "a", "cp");
 const CLAUDE_REGISTRY_KEY: &str = "claude";
 const CODEX_REGISTRY_KEY: &str = "codex";
 

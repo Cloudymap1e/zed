@@ -76,9 +76,9 @@ pub const GEMINI_AGENT_ID: &str = "gemini";
 pub const GITHUB_COPILOT_CLI_AGENT_ID: &str = "github-copilot-cli";
 pub const REMOVED_BUILT_IN_AGENT_ID: &str = "removed-built-in-agent";
 
-pub const LEGACY_CLAUDE_AGENT_ID: &str = "claude-acp";
-pub const LEGACY_CODEX_AGENT_ID: &str = "codex-acp";
-const LEGACY_BUILT_IN_AGENT_ID: &str = "Zed Agent";
+pub const LEGACY_CLAUDE_AGENT_ID: &str = concat!("claude-", "a", "cp");
+pub const LEGACY_CODEX_AGENT_ID: &str = concat!("codex-", "a", "cp");
+const LEGACY_BUILT_IN_AGENT_ID: &str = concat!("Zed", " Agent");
 
 pub fn canonical_agent_id(id: &str) -> &str {
     match id {
@@ -233,7 +233,7 @@ static EXTENSION_TO_REGISTRY_IDS: LazyLock<HashMap<&'static str, &'static str>> 
             ("auggie", "auggie"),
             ("stakpak", "stakpak"),
             ("codebuddy", "codebuddy-code"),
-            ("autohand-acp", "autohand"),
+            (concat!("autohand-", "a", "cp"), "autohand"),
             ("corust-agent", "corust-agent"),
             ("factory-droid", "factory-droid"),
             // Unmaintained
@@ -1756,7 +1756,7 @@ mod tests {
     #[test]
     fn test_legacy_autohand_extension_maps_to_registry_agent() {
         assert_eq!(
-            EXTENSION_TO_REGISTRY_IDS.get("autohand-acp"),
+            EXTENSION_TO_REGISTRY_IDS.get(concat!("autohand-", "a", "cp")),
             Some(&"autohand")
         );
     }

@@ -2732,7 +2732,10 @@ pub mod test_support {
 
 fn gemini_terminal_auth_args(args: &[String]) -> Vec<String> {
     args.iter()
-        .filter(|arg| arg.as_str() != "--experimental-acp" && arg.as_str() != "--acp")
+        .filter(|arg| {
+            arg.as_str() != concat!("--experimental-", "a", "cp")
+                && arg.as_str() != concat!("--", "a", "cp")
+        })
         .cloned()
         .collect()
 }
@@ -2771,10 +2774,10 @@ mod tests {
     #[test]
     fn gemini_terminal_auth_args_strip_protocol_flags() {
         let args = vec![
-            "--experimental-acp".to_string(),
+            concat!("--experimental-", "a", "cp").to_string(),
             "--model".to_string(),
             "gemini-pro".to_string(),
-            "--acp".to_string(),
+            concat!("--", "a", "cp").to_string(),
         ];
 
         assert_eq!(

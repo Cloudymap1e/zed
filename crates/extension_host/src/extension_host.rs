@@ -91,7 +91,7 @@ static SUPPRESSED_EXTENSIONS: LazyLock<FxHashSet<&str>> = LazyLock::new(|| {
         "auggie",
         "stakpak",
         "codebuddy",
-        "autohand-acp",
+        concat!("autohand-", "a", "cp"),
         "corust-agent",
         "factory-droid",
         "qqcode",

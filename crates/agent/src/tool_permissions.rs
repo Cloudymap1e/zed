@@ -1320,7 +1320,7 @@ mod tests {
         // A piped command like `echo "y\ny" | git add -p file` produces two commands:
         // "echo y\ny" and "git add -p file". Both should match their respective allow
         // patterns, so the overall command should be auto-allowed.
-        t(r#"echo "y\ny" | git add -p crates/acp_thread/src/acp_thread.rs"#)
+        t(r#"echo "y\ny" | git add -p crates/agent_thread/src/agent_thread.rs"#)
             .allow(&[r"^git\s+(--no-pager\s+)?(fetch|status|diff|log|show|add|commit|push|checkout\s+-b)\b", "^echo"])
             .is_allow();
     }

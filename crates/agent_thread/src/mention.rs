@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v1 as acp;
+use crate::protocol;
 use anyhow::{Context as _, Result, bail};
 use file_icons::FileIcons;
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ pub enum MentionUri {
         line_range: RangeInclusive<u32>,
     },
     Thread {
-        id: acp::SessionId,
+        id: protocol::SessionId,
         name: String,
     },
     /// Deprecated: kept so threads from before rules became skills still
@@ -205,7 +205,7 @@ impl MentionUri {
                 if let Some(thread_id) = path.strip_prefix("/agent/thread/") {
                     let name = single_query_param(&url, "name")?.context("Missing thread name")?;
                     Ok(Self::Thread {
-                        id: acp::SessionId::new(thread_id),
+                        id: protocol::SessionId::new(thread_id),
                         name,
                     })
                 } else if let Some(rule_id) = path.strip_prefix("/agent/rule/") {
@@ -1260,7 +1260,7 @@ mod tests {
         // A type without special disambiguation (Thread) — detail has no effect
         // (the value is a fixed point so the disambiguation loop terminates).
         let thread = MentionUri::Thread {
-            id: acp::SessionId::new("123"),
+            id: protocol::SessionId::new("123"),
             name: "My Thread".into(),
         };
         assert_eq!(thread.disambiguated_name(0), "My Thread");

@@ -51,7 +51,7 @@ pub(crate) fn render_external_agents_page(
         .overflow_y_scroll()
         .child(Label::new("External Agents"))
         .child(
-            Label::new("Agents connected through the Agent Client Protocol.")
+            Label::new("Agents connected through the External Agent protocol.")
                 .size(LabelSize::Small)
                 .color(Color::Muted),
         )
@@ -179,7 +179,7 @@ fn render_agent(
     };
 
     // Only custom agents are editable here; registry agents are managed via the
-    // ACP registry and only support removal.
+    // agent registry and only support removal.
     let configure_button = (source == ExternalAgentSource::Custom).then(|| {
         IconButton::new(format!("configure-{}", id_string), IconName::Settings)
             .icon_color(Color::Muted)
@@ -291,7 +291,7 @@ pub(crate) fn render_add_agent_popover(
                         original_window
                             .update(cx, |_, window, cx| {
                                 window.activate_window();
-                                window.dispatch_action(Box::new(zed_actions::AcpRegistry), cx);
+                                window.dispatch_action(Box::new(zed_actions::AgentRegistry), cx);
                             })
                             .log_err();
                     }
@@ -306,14 +306,14 @@ pub(crate) fn render_add_agent_popover(
                 .separator()
                 .header("Learn More")
                 .item(
-                    ContextMenuEntry::new("ACP Docs")
+                    ContextMenuEntry::new("External Agent Docs")
                         .icon(IconName::ArrowUpRight)
                         .icon_color(Color::Muted)
                         .icon_position(IconPosition::End)
                         .handler(move |window, cx| {
                             window.dispatch_action(
                                 Box::new(OpenBrowser {
-                                    url: "https://agentclientprotocol.com/".into(),
+                                    url: "https://zed.dev/docs/ai/external-agents".into(),
                                 }),
                                 cx,
                             );

@@ -1,5 +1,5 @@
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::protocol;
 use anyhow::Result;
 use futures::{FutureExt as _, StreamExt};
 use gpui::{App, Entity, SharedString, Task};
@@ -82,8 +82,8 @@ impl AgentTool for GrepTool {
 
     const NAME: &'static str = "grep";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Search
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Search
     }
 
     fn initial_title(
@@ -327,20 +327,20 @@ impl AgentTool for GrepTool {
                     output.push_str("\n```\n");
 
                     if let Some(abs_path) = &abs_path {
-                        content.push(acp::ToolCallContent::Content(acp::Content::new(
-                            acp::ContentBlock::ResourceLink(acp::ResourceLink::new(
+                        content.push(protocol::ToolCallContent::Content(protocol::Content::new(
+                            protocol::ContentBlock::ResourceLink(protocol::ResourceLink::new(
                                 format!("{}#{}", path.display(), line_label),
                                 format!("file://{}#{}", abs_path.display(), line_label),
                             )),
                         )));
                         locations.push(
-                            acp::ToolCallLocation::new(abs_path).line(Some(range.start.row)),
+                            protocol::ToolCallLocation::new(abs_path).line(Some(range.start.row)),
                         );
                     }
                     // Use a fence longer than any backtick run in the snippet so
                     // matches containing code fences don't break the rendering.
-                    content.push(acp::ToolCallContent::Content(acp::Content::new(
-                        acp::ContentBlock::Text(acp::TextContent::new(
+                    content.push(protocol::ToolCallContent::Content(protocol::Content::new(
+                        protocol::ContentBlock::Text(protocol::TextContent::new(
                             MarkdownCodeBlock {
                                 tag: "",
                                 text: &snippet,
@@ -362,7 +362,7 @@ impl AgentTool for GrepTool {
 
             if !content.is_empty() {
                 event_stream.update_fields(
-                    acp::ToolCallUpdateFields::new()
+                    protocol::ToolCallUpdateFields::new()
                         .content(content)
                         .locations(locations),
                 );
@@ -602,8 +602,8 @@ mod tests {
         let links = content
             .iter()
             .filter_map(|block| match block {
-                acp::ToolCallContent::Content(inner) => match &inner.content {
-                    acp::ContentBlock::ResourceLink(link) => Some(link),
+                protocol::ToolCallContent::Content(inner) => match &inner.content {
+                    protocol::ContentBlock::ResourceLink(link) => Some(link),
                     _ => None,
                 },
                 _ => None,
@@ -687,8 +687,8 @@ mod tests {
         let snippet = content
             .iter()
             .find_map(|block| match block {
-                acp::ToolCallContent::Content(inner) => match &inner.content {
-                    acp::ContentBlock::Text(text) => Some(text.text.as_str()),
+                protocol::ToolCallContent::Content(inner) => match &inner.content {
+                    protocol::ContentBlock::Text(text) => Some(text.text.as_str()),
                     _ => None,
                 },
                 _ => None,

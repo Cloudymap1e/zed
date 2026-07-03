@@ -2,8 +2,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::Duration;
 
-use acp_thread::{
-    AcpThread, AcpThreadEvent, AgentThreadEntry, AssistantMessageChunk, ContentBlock,
+use agent_thread::{
+    AgentThread, AgentThreadEntry, AgentThreadEvent, AssistantMessageChunk, ContentBlock,
     ToolCallContent,
 };
 use collections::HashMap;
@@ -138,7 +138,7 @@ pub struct ThreadSearchBar {
     query_error_message: Option<SharedString>,
     highlighted_markdowns: Vec<WeakEntity<Markdown>>,
     highlighted_editors: Vec<WeakEntity<Editor>>,
-    thread: Entity<AcpThread>,
+    thread: Entity<AgentThread>,
     entry_view_state: Entity<EntryViewState>,
     on_activate_match: Arc<dyn Fn(usize, &mut Window, &mut App)>,
     is_active: bool,
@@ -161,7 +161,7 @@ impl Focusable for ThreadSearchBar {
 
 impl ThreadSearchBar {
     pub fn new(
-        thread: Entity<AcpThread>,
+        thread: Entity<AgentThread>,
         entry_view_state: Entity<EntryViewState>,
         on_activate_match: Arc<dyn Fn(usize, &mut Window, &mut App)>,
         window: &mut Window,
@@ -189,13 +189,13 @@ impl ThreadSearchBar {
         let thread_subscription = cx.subscribe_in(
             &thread,
             window,
-            |this, _thread, event: &AcpThreadEvent, window, cx| {
+            |this, _thread, event: &AgentThreadEvent, window, cx| {
                 if this.is_active
                     && matches!(
                         event,
-                        AcpThreadEvent::NewEntry
-                            | AcpThreadEvent::EntryUpdated(_)
-                            | AcpThreadEvent::EntriesRemoved(_)
+                        AgentThreadEvent::NewEntry
+                            | AgentThreadEvent::EntryUpdated(_)
+                            | AgentThreadEvent::EntriesRemoved(_)
                     )
                 {
                     this.schedule_update_matches(window, cx);
@@ -718,7 +718,7 @@ impl Render for ThreadSearchBar {
         let in_error_state = self.query_error || (!query_empty && !has_matches);
 
         let mut key_context = KeyContext::new_with_defaults();
-        key_context.add("AcpThreadSearchBar");
+        key_context.add("AgentThreadSearchBar");
 
         let counter_text = self.active_match_text(cx).unwrap_or_default();
 

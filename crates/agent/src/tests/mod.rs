@@ -1,10 +1,10 @@
 use super::*;
-use acp_thread::{
+use agent_settings::AgentProfileId;
+use agent_thread::protocol;
+use agent_thread::{
     AgentConnection, AgentModelGroupName, AgentModelList, ClientUserMessageId, PermissionOptions,
     ThreadStatus,
 };
-use agent_client_protocol::schema::v1 as acp;
-use agent_settings::AgentProfileId;
 use anyhow::Result;
 use client::{Client, RefreshLlmTokenListener, UserStore};
 use collections::IndexMap;
@@ -68,9 +68,9 @@ pub(crate) struct FakeTerminalHandle {
     killed: Arc<AtomicBool>,
     stopped_by_user: Arc<AtomicBool>,
     exit_sender: std::cell::RefCell<Option<futures::channel::oneshot::Sender<()>>>,
-    wait_for_exit: Shared<Task<acp::TerminalExitStatus>>,
-    output: acp::TerminalOutputResponse,
-    id: acp::TerminalId,
+    wait_for_exit: Shared<Task<protocol::TerminalExitStatus>>,
+    output: protocol::TerminalOutputResponse,
+    id: protocol::TerminalId,
 }
 
 impl FakeTerminalHandle {
@@ -84,7 +84,7 @@ impl FakeTerminalHandle {
             .spawn(async move |_cx| {
                 // Wait for the exit signal (sent when kill() is called)
                 let _ = exit_receiver.await;
-                acp::TerminalExitStatus::new()
+                protocol::TerminalExitStatus::new()
             })
             .shared();
 
@@ -93,8 +93,8 @@ impl FakeTerminalHandle {
             stopped_by_user,
             exit_sender: std::cell::RefCell::new(Some(exit_sender)),
             wait_for_exit,
-            output: acp::TerminalOutputResponse::new("partial output".to_string(), false),
-            id: acp::TerminalId::new("fake_terminal".to_string()),
+            output: protocol::TerminalOutputResponse::new("partial output".to_string(), false),
+            id: protocol::TerminalId::new("fake_terminal".to_string()),
         }
     }
 
@@ -104,7 +104,7 @@ impl FakeTerminalHandle {
         let (exit_sender, _exit_receiver) = futures::channel::oneshot::channel();
 
         let wait_for_exit = cx
-            .spawn(async move |_cx| acp::TerminalExitStatus::new().exit_code(exit_code))
+            .spawn(async move |_cx| protocol::TerminalExitStatus::new().exit_code(exit_code))
             .shared();
 
         Self {
@@ -112,12 +112,12 @@ impl FakeTerminalHandle {
             stopped_by_user,
             exit_sender: std::cell::RefCell::new(Some(exit_sender)),
             wait_for_exit,
-            output: acp::TerminalOutputResponse::new("command output".to_string(), false),
-            id: acp::TerminalId::new("fake_terminal".to_string()),
+            output: protocol::TerminalOutputResponse::new("command output".to_string(), false),
+            id: protocol::TerminalId::new("fake_terminal".to_string()),
         }
     }
 
-    pub(crate) fn with_output(mut self, output: acp::TerminalOutputResponse) -> Self {
+    pub(crate) fn with_output(mut self, output: protocol::TerminalOutputResponse) -> Self {
         self.output = output;
         self
     }
@@ -138,15 +138,15 @@ impl FakeTerminalHandle {
 }
 
 impl crate::TerminalHandle for FakeTerminalHandle {
-    fn id(&self, _cx: &AsyncApp) -> Result<acp::TerminalId> {
+    fn id(&self, _cx: &AsyncApp) -> Result<protocol::TerminalId> {
         Ok(self.id.clone())
     }
 
-    fn current_output(&self, _cx: &AsyncApp) -> Result<acp::TerminalOutputResponse> {
+    fn current_output(&self, _cx: &AsyncApp) -> Result<protocol::TerminalOutputResponse> {
         Ok(self.output.clone())
     }
 
-    fn wait_for_exit(&self, _cx: &AsyncApp) -> Result<Shared<Task<acp::TerminalExitStatus>>> {
+    fn wait_for_exit(&self, _cx: &AsyncApp) -> Result<Shared<Task<protocol::TerminalExitStatus>>> {
         Ok(self.wait_for_exit.clone())
     }
 
@@ -162,12 +162,12 @@ impl crate::TerminalHandle for FakeTerminalHandle {
 }
 
 struct FakeSubagentHandle {
-    session_id: acp::SessionId,
+    session_id: protocol::SessionId,
     send_task: Shared<Task<String>>,
 }
 
 impl SubagentHandle for FakeSubagentHandle {
-    fn id(&self) -> acp::SessionId {
+    fn id(&self) -> protocol::SessionId {
         self.session_id.clone()
     }
 
@@ -210,10 +210,10 @@ impl crate::ThreadEnvironment for FakeThreadEnvironment {
     fn create_terminal(
         &self,
         _command: String,
-        _extra_env: Vec<acp::EnvVariable>,
+        _extra_env: Vec<protocol::EnvVariable>,
         _cwd: Option<std::path::PathBuf>,
         output_byte_limit: Option<u64>,
-        _sandbox_wrap: Option<acp_thread::SandboxWrap>,
+        _sandbox_wrap: Option<agent_thread::SandboxWrap>,
         _cx: &mut AsyncApp,
     ) -> Task<Result<Rc<dyn crate::TerminalHandle>>> {
         self.terminal_creations.fetch_add(1, Ordering::SeqCst);
@@ -257,10 +257,10 @@ impl crate::ThreadEnvironment for MultiTerminalEnvironment {
     fn create_terminal(
         &self,
         _command: String,
-        _extra_env: Vec<acp::EnvVariable>,
+        _extra_env: Vec<protocol::EnvVariable>,
         _cwd: Option<std::path::PathBuf>,
         _output_byte_limit: Option<u64>,
-        _sandbox_wrap: Option<acp_thread::SandboxWrap>,
+        _sandbox_wrap: Option<agent_thread::SandboxWrap>,
         cx: &mut AsyncApp,
     ) -> Task<Result<Rc<dyn crate::TerminalHandle>>> {
         let handle = Rc::new(cx.update(|cx| FakeTerminalHandle::new_never_exits(cx)));
@@ -328,7 +328,7 @@ async fn test_echo(cx: &mut TestAppContext) {
             "Hello\n"
         )
     });
-    assert_eq!(stop_events(events), vec![acp::StopReason::EndTurn]);
+    assert_eq!(stop_events(events), vec![protocol::StopReason::EndTurn]);
 }
 
 #[gpui::test]
@@ -366,7 +366,7 @@ async fn test_terminal_tool_timeout_kills_handle(cx: &mut TestAppContext) {
         update.content.iter().any(|blocks| {
             blocks
                 .iter()
-                .any(|c| matches!(c, acp::ToolCallContent::Terminal(_)))
+                .any(|c| matches!(c, protocol::ToolCallContent::Terminal(_)))
         }),
         "expected tool call update to include terminal content"
     );
@@ -434,7 +434,7 @@ async fn test_terminal_tool_without_timeout_does_not_kill_handle(cx: &mut TestAp
         update.content.iter().any(|blocks| {
             blocks
                 .iter()
-                .any(|c| matches!(c, acp::ToolCallContent::Terminal(_)))
+                .any(|c| matches!(c, protocol::ToolCallContent::Terminal(_)))
         }),
         "expected tool call update to include terminal content"
     );
@@ -495,7 +495,7 @@ async fn test_thinking(cx: &mut TestAppContext) {
             "}
         )
     });
-    assert_eq!(stop_events(events), vec![acp::StopReason::EndTurn]);
+    assert_eq!(stop_events(events), vec![protocol::StopReason::EndTurn]);
 }
 
 #[gpui::test]
@@ -773,7 +773,7 @@ async fn test_basic_tool_calls(cx: &mut TestAppContext) {
         .unwrap()
         .collect()
         .await;
-    assert_eq!(stop_events(events), vec![acp::StopReason::EndTurn]);
+    assert_eq!(stop_events(events), vec![protocol::StopReason::EndTurn]);
 
     // Test a tool calls that's likely to complete *after* streaming stops.
     let events = thread
@@ -792,7 +792,7 @@ async fn test_basic_tool_calls(cx: &mut TestAppContext) {
         .unwrap()
         .collect()
         .await;
-    assert_eq!(stop_events(events), vec![acp::StopReason::EndTurn]);
+    assert_eq!(stop_events(events), vec![protocol::StopReason::EndTurn]);
     thread.update(cx, |thread, _cx| {
         assert!(
             thread
@@ -838,7 +838,7 @@ async fn test_streaming_tool_calls(cx: &mut TestAppContext) {
                 let last_content = agent_message.content.last().unwrap();
                 if let AgentMessageContent::ToolUse(last_tool_use) = last_content {
                     assert_eq!(last_tool_use.name.as_ref(), "word_list");
-                    if tool_call.status == acp::ToolCallStatus::Pending {
+                    if tool_call.status == protocol::ToolCallStatus::Pending {
                         if !last_tool_use.is_input_complete
                             && last_tool_use.input.get("g").is_none()
                         {
@@ -906,9 +906,9 @@ async fn test_tool_authorization(cx: &mut TestAppContext) {
     // Approve the first - send "allow" option_id (UI transforms "once" to "allow")
     tool_call_auth_1
         .response
-        .send(acp_thread::SelectedPermissionOutcome::new(
-            acp::PermissionOptionId::new("allow"),
-            acp::PermissionOptionKind::AllowOnce,
+        .send(agent_thread::SelectedPermissionOutcome::new(
+            protocol::PermissionOptionId::new("allow"),
+            protocol::PermissionOptionKind::AllowOnce,
         ))
         .unwrap();
     cx.run_until_parked();
@@ -916,9 +916,9 @@ async fn test_tool_authorization(cx: &mut TestAppContext) {
     // Reject the second - send "deny" option_id directly since Deny is now a button
     tool_call_auth_2
         .response
-        .send(acp_thread::SelectedPermissionOutcome::new(
-            acp::PermissionOptionId::new("deny"),
-            acp::PermissionOptionKind::RejectOnce,
+        .send(agent_thread::SelectedPermissionOutcome::new(
+            protocol::PermissionOptionId::new("deny"),
+            protocol::PermissionOptionKind::RejectOnce,
         ))
         .unwrap();
     cx.run_until_parked();
@@ -963,9 +963,9 @@ async fn test_tool_authorization(cx: &mut TestAppContext) {
     let tool_call_auth_3 = next_tool_call_authorization(&mut events).await;
     tool_call_auth_3
         .response
-        .send(acp_thread::SelectedPermissionOutcome::new(
-            acp::PermissionOptionId::new("always_allow:tool_requiring_permission"),
-            acp::PermissionOptionKind::AllowAlways,
+        .send(agent_thread::SelectedPermissionOutcome::new(
+            protocol::PermissionOptionId::new("always_allow:tool_requiring_permission"),
+            protocol::PermissionOptionKind::AllowAlways,
         ))
         .unwrap();
     cx.run_until_parked();
@@ -1038,12 +1038,14 @@ async fn test_tool_hallucination(cx: &mut TestAppContext) {
 
     let tool_call = expect_tool_call(&mut events).await;
     assert_eq!(tool_call.title, "nonexistent_tool");
-    assert_eq!(tool_call.status, acp::ToolCallStatus::Pending);
+    assert_eq!(tool_call.status, protocol::ToolCallStatus::Pending);
     let update = expect_tool_call_update_fields(&mut events).await;
-    assert_eq!(update.fields.status, Some(acp::ToolCallStatus::Failed));
+    assert_eq!(update.fields.status, Some(protocol::ToolCallStatus::Failed));
 }
 
-async fn expect_tool_call(events: &mut UnboundedReceiver<Result<ThreadEvent>>) -> acp::ToolCall {
+async fn expect_tool_call(
+    events: &mut UnboundedReceiver<Result<ThreadEvent>>,
+) -> protocol::ToolCall {
     let event = events
         .next()
         .await
@@ -1059,14 +1061,14 @@ async fn expect_tool_call(events: &mut UnboundedReceiver<Result<ThreadEvent>>) -
 
 async fn expect_tool_call_update_fields(
     events: &mut UnboundedReceiver<Result<ThreadEvent>>,
-) -> acp::ToolCallUpdate {
+) -> protocol::ToolCallUpdate {
     let event = events
         .next()
         .await
         .expect("no tool call authorization event received")
         .unwrap();
     match event {
-        ThreadEvent::ToolCallUpdate(acp_thread::ToolCallUpdate::UpdateFields(update)) => update,
+        ThreadEvent::ToolCallUpdate(agent_thread::ToolCallUpdate::UpdateFields(update)) => update,
         event => {
             panic!("Unexpected event {event:?}");
         }
@@ -1085,18 +1087,18 @@ async fn next_tool_call_authorization(
         if let ThreadEvent::ToolCallAuthorization(tool_call_authorization) = event {
             let permission_kinds = tool_call_authorization
                 .options
-                .first_option_of_kind(acp::PermissionOptionKind::AllowAlways)
+                .first_option_of_kind(protocol::PermissionOptionKind::AllowAlways)
                 .map(|option| option.kind);
             let allow_once = tool_call_authorization
                 .options
-                .first_option_of_kind(acp::PermissionOptionKind::AllowOnce)
+                .first_option_of_kind(protocol::PermissionOptionKind::AllowOnce)
                 .map(|option| option.kind);
 
             assert_eq!(
                 permission_kinds,
-                Some(acp::PermissionOptionKind::AllowAlways)
+                Some(protocol::PermissionOptionKind::AllowAlways)
             );
-            assert_eq!(allow_once, Some(acp::PermissionOptionKind::AllowOnce));
+            assert_eq!(allow_once, Some(protocol::PermissionOptionKind::AllowOnce));
             return tool_call_authorization;
         }
     }
@@ -1235,11 +1237,11 @@ fn test_permission_options_symlink_target_are_flat_once_only() {
     assert_eq!(options.len(), 2);
     assert!(options.iter().any(|option| {
         option.option_id.0.as_ref() == "allow"
-            && option.kind == acp::PermissionOptionKind::AllowOnce
+            && option.kind == protocol::PermissionOptionKind::AllowOnce
     }));
     assert!(options.iter().any(|option| {
         option.option_id.0.as_ref() == "deny"
-            && option.kind == acp::PermissionOptionKind::RejectOnce
+            && option.kind == protocol::PermissionOptionKind::RejectOnce
     }));
 }
 
@@ -1363,7 +1365,7 @@ async fn test_concurrent_tool_calls(cx: &mut TestAppContext) {
         .await;
 
     let stop_reasons = stop_events(events);
-    assert_eq!(stop_reasons, vec![acp::StopReason::EndTurn]);
+    assert_eq!(stop_reasons, vec![protocol::StopReason::EndTurn]);
 
     thread.update(cx, |thread, _cx| {
         let last_message = thread.last_received_or_pending_message().unwrap();
@@ -2004,7 +2006,7 @@ async fn test_mcp_tool_result_displayed_when_server_disconnected(cx: &mut TestAp
             ThreadEvent::ToolCall(tc) if tc.tool_call_id.to_string() == "tool_1" => {
                 found_tool_call = Some(tc.clone());
             }
-            ThreadEvent::ToolCallUpdate(acp_thread::ToolCallUpdate::UpdateFields(update))
+            ThreadEvent::ToolCallUpdate(agent_thread::ToolCallUpdate::UpdateFields(update))
                 if update.tool_call_id.to_string() == "tool_1" =>
             {
                 if update.fields.raw_output.is_some() {
@@ -2036,7 +2038,7 @@ async fn test_mcp_tool_result_displayed_when_server_disconnected(cx: &mut TestAp
     // Also verify the status is correct (completed, not failed)
     assert_eq!(
         update.fields.status,
-        Some(acp::ToolCallStatus::Completed),
+        Some(protocol::ToolCallStatus::Completed),
         "Tool call status should reflect the original completion status"
     );
 }
@@ -2264,12 +2266,12 @@ async fn test_cancellation(cx: &mut TestAppContext) {
                     echo_id = Some(tool_call.tool_call_id);
                 }
             }
-            ThreadEvent::ToolCallUpdate(acp_thread::ToolCallUpdate::UpdateFields(
-                acp::ToolCallUpdate {
+            ThreadEvent::ToolCallUpdate(agent_thread::ToolCallUpdate::UpdateFields(
+                protocol::ToolCallUpdate {
                     tool_call_id,
                     fields:
-                        acp::ToolCallUpdateFields {
-                            status: Some(acp::ToolCallStatus::Completed),
+                        protocol::ToolCallUpdateFields {
+                            status: Some(protocol::ToolCallStatus::Completed),
                             ..
                         },
                     ..
@@ -2293,7 +2295,7 @@ async fn test_cancellation(cx: &mut TestAppContext) {
     assert!(
         matches!(
             last_event,
-            Some(Ok(ThreadEvent::Stop(acp::StopReason::Cancelled)))
+            Some(Ok(ThreadEvent::Stop(protocol::StopReason::Cancelled)))
         ),
         "unexpected event {last_event:?}"
     );
@@ -2318,7 +2320,7 @@ async fn test_cancellation(cx: &mut TestAppContext) {
             vec![AgentMessageContent::Text("Hello".to_string())]
         );
     });
-    assert_eq!(stop_events(events), vec![acp::StopReason::EndTurn]);
+    assert_eq!(stop_events(events), vec![protocol::StopReason::EndTurn]);
 }
 
 #[gpui::test]
@@ -2376,7 +2378,7 @@ async fn test_terminal_tool_cancellation_captures_output(cx: &mut TestAppContext
     // Verify we got a cancellation stop event
     assert_eq!(
         stop_events(remaining_events),
-        vec![acp::StopReason::Cancelled],
+        vec![protocol::StopReason::Cancelled],
     );
 
     // Verify the tool result contains the terminal output, not just "Tool canceled by user"
@@ -2504,7 +2506,7 @@ async fn test_cancellation_aware_tool_responds_to_cancellation(cx: &mut TestAppC
     // Verify we got a cancellation stop event
     assert_eq!(
         stop_events(remaining_events),
-        vec![acp::StopReason::Cancelled],
+        vec![protocol::StopReason::Cancelled],
     );
 
     // Verify we can send a new message after cancellation
@@ -2541,7 +2543,7 @@ async fn verify_thread_recovery(
             vec![AgentMessageContent::Text("Hello".to_string())]
         );
     });
-    assert_eq!(stop_events(events), vec![acp::StopReason::EndTurn]);
+    assert_eq!(stop_events(events), vec![protocol::StopReason::EndTurn]);
 }
 
 /// Waits for a terminal tool to start by watching for a ToolCallUpdate with terminal content.
@@ -2554,14 +2556,14 @@ async fn wait_for_terminal_tool_started(
         cx.run_until_parked();
 
         while let Some(Some(event)) = events.next().now_or_never() {
-            if let Ok(ThreadEvent::ToolCallUpdate(acp_thread::ToolCallUpdate::UpdateFields(
+            if let Ok(ThreadEvent::ToolCallUpdate(agent_thread::ToolCallUpdate::UpdateFields(
                 update,
             ))) = &event
             {
                 if update.fields.content.as_ref().is_some_and(|content| {
                     content
                         .iter()
-                        .any(|c| matches!(c, acp::ToolCallContent::Terminal(_)))
+                        .any(|c| matches!(c, protocol::ToolCallContent::Terminal(_)))
                 }) {
                     return;
                 }
@@ -2721,14 +2723,14 @@ async fn test_cancel_multiple_concurrent_terminal_tools(cx: &mut TestAppContext)
         cx.run_until_parked();
 
         while let Some(Some(event)) = events.next().now_or_never() {
-            if let Ok(ThreadEvent::ToolCallUpdate(acp_thread::ToolCallUpdate::UpdateFields(
+            if let Ok(ThreadEvent::ToolCallUpdate(agent_thread::ToolCallUpdate::UpdateFields(
                 update,
             ))) = &event
             {
                 if update.fields.content.as_ref().is_some_and(|content| {
                     content
                         .iter()
-                        .any(|c| matches!(c, acp::ToolCallContent::Terminal(_)))
+                        .any(|c| matches!(c, protocol::ToolCallContent::Terminal(_)))
                 }) {
                     terminals_started += 1;
                     if terminals_started >= 2 {
@@ -2775,7 +2777,7 @@ async fn test_cancel_multiple_concurrent_terminal_tools(cx: &mut TestAppContext)
     // Verify we got a cancellation stop event
     assert_eq!(
         stop_events(remaining_events),
-        vec![acp::StopReason::Cancelled],
+        vec![protocol::StopReason::Cancelled],
     );
 }
 
@@ -2841,7 +2843,7 @@ async fn test_terminal_tool_stopped_via_terminal_card_button(cx: &mut TestAppCon
     // Verify we got an EndTurn (not Cancelled, since we didn't cancel the thread)
     assert_eq!(
         stop_events(remaining_events),
-        vec![acp::StopReason::EndTurn],
+        vec![protocol::StopReason::EndTurn],
     );
 
     // Verify the tool result indicates user stopped
@@ -2938,7 +2940,7 @@ async fn test_terminal_tool_timeout_expires(cx: &mut TestAppContext) {
     // Verify we got an EndTurn (the tool completed, just with timeout)
     assert_eq!(
         stop_events(remaining_events),
-        vec![acp::StopReason::EndTurn],
+        vec![protocol::StopReason::EndTurn],
     );
 
     // Verify the tool result indicates timeout, not user stopped
@@ -2999,9 +3001,9 @@ async fn test_in_progress_send_canceled_by_next_send(cx: &mut TestAppContext) {
     fake_model.end_last_completion_stream();
 
     let events_1 = events_1.collect::<Vec<_>>().await;
-    assert_eq!(stop_events(events_1), vec![acp::StopReason::Cancelled]);
+    assert_eq!(stop_events(events_1), vec![protocol::StopReason::Cancelled]);
     let events_2 = events_2.collect::<Vec<_>>().await;
-    assert_eq!(stop_events(events_2), vec![acp::StopReason::EndTurn]);
+    assert_eq!(stop_events(events_2), vec![protocol::StopReason::EndTurn]);
 }
 
 #[gpui::test]
@@ -3076,10 +3078,10 @@ async fn test_retry_cancelled_promptly_on_new_send(cx: &mut TestAppContext) {
     model_b.as_fake().end_last_completion_stream();
 
     let events_1 = events_1.collect::<Vec<_>>().await;
-    assert_eq!(stop_events(events_1), vec![acp::StopReason::Cancelled]);
+    assert_eq!(stop_events(events_1), vec![protocol::StopReason::Cancelled]);
 
     let events_2 = events_2.collect::<Vec<_>>().await;
-    assert_eq!(stop_events(events_2), vec![acp::StopReason::EndTurn]);
+    assert_eq!(stop_events(events_2), vec![protocol::StopReason::EndTurn]);
 }
 
 #[gpui::test]
@@ -3111,8 +3113,8 @@ async fn test_subsequent_successful_sends_dont_cancel(cx: &mut TestAppContext) {
     fake_model.end_last_completion_stream();
     let events_2 = events_2.collect::<Vec<_>>().await;
 
-    assert_eq!(stop_events(events_1), vec![acp::StopReason::EndTurn]);
-    assert_eq!(stop_events(events_2), vec![acp::StopReason::EndTurn]);
+    assert_eq!(stop_events(events_1), vec![protocol::StopReason::EndTurn]);
+    assert_eq!(stop_events(events_2), vec![protocol::StopReason::EndTurn]);
 }
 
 #[gpui::test]
@@ -3158,7 +3160,7 @@ async fn test_refusal(cx: &mut TestAppContext) {
     fake_model
         .send_last_completion_stream_event(LanguageModelCompletionEvent::Stop(StopReason::Refusal));
     let events = events.collect::<Vec<_>>().await;
-    assert_eq!(stop_events(events), vec![acp::StopReason::Refusal]);
+    assert_eq!(stop_events(events), vec![protocol::StopReason::Refusal]);
     thread.read_with(cx, |thread, _| {
         assert_eq!(thread.to_markdown(), "");
     });
@@ -3213,7 +3215,7 @@ async fn test_truncate_first_message(cx: &mut TestAppContext) {
         );
         assert_eq!(
             thread.latest_token_usage(),
-            Some(acp_thread::TokenUsage {
+            Some(agent_thread::TokenUsage {
                 used_tokens: 32_000 + 16_000,
                 max_tokens: 1_000_000,
                 max_output_tokens: None,
@@ -3275,7 +3277,7 @@ async fn test_truncate_first_message(cx: &mut TestAppContext) {
 
         assert_eq!(
             thread.latest_token_usage(),
-            Some(acp_thread::TokenUsage {
+            Some(agent_thread::TokenUsage {
                 used_tokens: 40_000 + 20_000,
                 max_tokens: 1_000_000,
                 max_output_tokens: None,
@@ -3314,7 +3316,7 @@ async fn test_latest_token_usage_counts_cached_input_tokens(cx: &mut TestAppCont
     thread.read_with(cx, |thread, _| {
         assert_eq!(
             thread.latest_token_usage(),
-            Some(acp_thread::TokenUsage {
+            Some(agent_thread::TokenUsage {
                 used_tokens: 250,
                 max_tokens: 1_000_000,
                 max_output_tokens: None,
@@ -3418,7 +3420,7 @@ async fn test_cumulative_token_usage(cx: &mut TestAppContext) {
         let templates = thread.templates.clone();
         cx.new(|cx| {
             Thread::from_db(
-                acp::SessionId::new("restored"),
+                protocol::SessionId::new("restored"),
                 db_thread,
                 project,
                 project_context.clone(),
@@ -3517,7 +3519,7 @@ async fn test_truncate_second_message(cx: &mut TestAppContext) {
 
             assert_eq!(
                 thread.latest_token_usage(),
-                Some(acp_thread::TokenUsage {
+                Some(agent_thread::TokenUsage {
                     used_tokens: 32_000 + 16_000,
                     max_tokens: 1_000_000,
                     max_output_tokens: None,
@@ -3574,7 +3576,7 @@ async fn test_truncate_second_message(cx: &mut TestAppContext) {
 
         assert_eq!(
             thread.latest_token_usage(),
-            Some(acp_thread::TokenUsage {
+            Some(agent_thread::TokenUsage {
                 used_tokens: 40_000 + 20_000,
                 max_tokens: 1_000_000,
                 max_output_tokens: None,
@@ -3882,13 +3884,13 @@ async fn test_agent_connection(cx: &mut TestAppContext) {
 
     // Create a thread using new_thread
     let connection_rc = Rc::new(connection.clone());
-    let acp_thread = cx
+    let agent_thread = cx
         .update(|cx| connection_rc.new_session(project, cwd, cx))
         .await
         .expect("new_thread should succeed");
 
-    // Get the session_id from the AcpThread
-    let session_id = acp_thread.read_with(cx, |thread, _| thread.session_id().clone());
+    // Get the session_id from the AgentThread
+    let session_id = agent_thread.read_with(cx, |thread, _| thread.session_id().clone());
 
     // Test model_selector returns Some
     let selector_opt = connection.model_selector(&session_id);
@@ -3925,11 +3927,11 @@ async fn test_agent_connection(cx: &mut TestAppContext) {
     let model = model.as_fake();
     assert_eq!(model.id().0, "fake", "should return default model");
 
-    let request = acp_thread.update(cx, |thread, cx| thread.send(vec!["abc".into()], cx));
+    let request = agent_thread.update(cx, |thread, cx| thread.send(vec!["abc".into()], cx));
     cx.run_until_parked();
     model.send_last_completion_stream_text_chunk("def");
     cx.run_until_parked();
-    acp_thread.read_with(cx, |thread, cx| {
+    agent_thread.read_with(cx, |thread, cx| {
         assert_eq!(
             thread.to_markdown(cx),
             indoc! {"
@@ -3949,17 +3951,17 @@ async fn test_agent_connection(cx: &mut TestAppContext) {
     cx.update(|cx| connection.cancel(&session_id, cx));
     request.await.expect("prompt should fail gracefully");
 
-    // Explicitly close the session and drop the ACP thread.
+    // Explicitly close the session and drop the protocol thread.
     cx.update(|cx| Rc::new(connection.clone()).close_session(&session_id, cx))
         .await
         .unwrap();
-    drop(acp_thread);
+    drop(agent_thread);
     let result = cx
         .update(|cx| {
-            acp_thread::AgentSessionClientUserMessageIds::prompt(
+            agent_thread::AgentSessionClientUserMessageIds::prompt(
                 &connection,
-                acp_thread::ClientUserMessageId::new(),
-                acp::PromptRequest::new(session_id.clone(), vec!["ghi".into()]),
+                agent_thread::ClientUserMessageId::new(),
+                protocol::PromptRequest::new(session_id.clone(), vec!["ghi".into()]),
                 cx,
             )
         })
@@ -4016,36 +4018,39 @@ async fn test_tool_updates_to_completion(cx: &mut TestAppContext) {
     let tool_call = expect_tool_call(&mut events).await;
     assert_eq!(
         tool_call,
-        acp::ToolCall::new("1", "Echo")
+        protocol::ToolCall::new("1", "Echo")
             .raw_input(json!({}))
-            .meta(acp::Meta::from_iter([("tool_name".into(), "echo".into())]))
+            .meta(protocol::Meta::from_iter([(
+                "tool_name".into(),
+                "echo".into()
+            )]))
     );
     let update = expect_tool_call_update_fields(&mut events).await;
     assert_eq!(
         update,
-        acp::ToolCallUpdate::new(
+        protocol::ToolCallUpdate::new(
             "1",
-            acp::ToolCallUpdateFields::new()
+            protocol::ToolCallUpdateFields::new()
                 .title("Echo")
-                .kind(acp::ToolKind::Other)
+                .kind(protocol::ToolKind::Other)
                 .raw_input(json!({ "text": "Hello!"}))
         )
     );
     let update = expect_tool_call_update_fields(&mut events).await;
     assert_eq!(
         update,
-        acp::ToolCallUpdate::new(
+        protocol::ToolCallUpdate::new(
             "1",
-            acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::InProgress)
+            protocol::ToolCallUpdateFields::new().status(protocol::ToolCallStatus::InProgress)
         )
     );
     let update = expect_tool_call_update_fields(&mut events).await;
     assert_eq!(
         update,
-        acp::ToolCallUpdate::new(
+        protocol::ToolCallUpdate::new(
             "1",
-            acp::ToolCallUpdateFields::new()
-                .status(acp::ToolCallStatus::Completed)
+            protocol::ToolCallUpdateFields::new()
+                .status(protocol::ToolCallStatus::Completed)
                 .raw_output("Hello!")
         )
     );
@@ -4134,7 +4139,7 @@ async fn test_send_retry_on_error(cx: &mut TestAppContext) {
     assert_eq!(retry_events.len(), 1);
     assert!(matches!(
         retry_events[0],
-        acp_thread::RetryStatus { attempt: 1, .. }
+        agent_thread::RetryStatus { attempt: 1, .. }
     ));
     thread.read_with(cx, |thread, _cx| {
         assert_eq!(
@@ -4508,7 +4513,7 @@ async fn test_streaming_tool_json_parse_error_is_forwarded_to_running_tool(
 }
 
 /// Filters out the stop events for asserting against in tests
-fn stop_events(result_events: Vec<Result<ThreadEvent>>) -> Vec<acp::StopReason> {
+fn stop_events(result_events: Vec<Result<ThreadEvent>>) -> Vec<protocol::StopReason> {
     result_events
         .into_iter()
         .filter_map(|event| match event.unwrap() {
@@ -5054,7 +5059,7 @@ async fn test_terminal_tool_permission_rules(cx: &mut TestAppContext) {
             update.content.iter().any(|blocks| {
                 blocks
                     .iter()
-                    .any(|c| matches!(c, acp::ToolCallContent::Terminal(_)))
+                    .any(|c| matches!(c, protocol::ToolCallContent::Terminal(_)))
             }),
             "expected terminal content (allow rule should skip confirmation and override default deny)"
         );
@@ -5196,7 +5201,7 @@ async fn test_subagent_tool_call_end_to_end(cx: &mut TestAppContext) {
         cx.update(|cx| NativeAgent::new(thread_store.clone(), Templates::new(), fs.clone(), cx));
     let connection = Rc::new(NativeAgentConnection(agent.clone()));
 
-    let acp_thread = cx
+    let agent_thread = cx
         .update(|cx| {
             connection
                 .clone()
@@ -5204,7 +5209,7 @@ async fn test_subagent_tool_call_end_to_end(cx: &mut TestAppContext) {
         })
         .await
         .unwrap();
-    let session_id = acp_thread.read_with(cx, |thread, _| thread.session_id().clone());
+    let session_id = agent_thread.read_with(cx, |thread, _| thread.session_id().clone());
     let thread = agent.read_with(cx, |agent, _| {
         agent.sessions.get(&session_id).unwrap().thread.clone()
     });
@@ -5216,7 +5221,7 @@ async fn test_subagent_tool_call_end_to_end(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
 
-    let send = acp_thread.update(cx, |thread, cx| thread.send_raw("Prompt", cx));
+    let send = agent_thread.update(cx, |thread, cx| thread.send_raw("Prompt", cx));
     cx.run_until_parked();
     model.send_last_completion_stream_text_chunk("spawning subagent");
     let subagent_tool_input = SpawnAgentToolInput {
@@ -5252,7 +5257,7 @@ async fn test_subagent_tool_call_end_to_end(cx: &mut TestAppContext) {
             .sessions
             .get(&subagent_session_id)
             .expect("subagent session should exist")
-            .acp_thread
+            .agent_thread
             .clone()
     });
 
@@ -5281,7 +5286,7 @@ async fn test_subagent_tool_call_end_to_end(cx: &mut TestAppContext) {
     send.await.unwrap();
 
     assert_eq!(
-        acp_thread.read_with(cx, |thread, cx| thread.to_markdown(cx)),
+        agent_thread.read_with(cx, |thread, cx| thread.to_markdown(cx)),
         indoc! {r#"
             ## User
 
@@ -5330,7 +5335,7 @@ async fn test_subagent_tool_output_does_not_include_thinking(cx: &mut TestAppCon
         cx.update(|cx| NativeAgent::new(thread_store.clone(), Templates::new(), fs.clone(), cx));
     let connection = Rc::new(NativeAgentConnection(agent.clone()));
 
-    let acp_thread = cx
+    let agent_thread = cx
         .update(|cx| {
             connection
                 .clone()
@@ -5338,7 +5343,7 @@ async fn test_subagent_tool_output_does_not_include_thinking(cx: &mut TestAppCon
         })
         .await
         .unwrap();
-    let session_id = acp_thread.read_with(cx, |thread, _| thread.session_id().clone());
+    let session_id = agent_thread.read_with(cx, |thread, _| thread.session_id().clone());
     let thread = agent.read_with(cx, |agent, _| {
         agent.sessions.get(&session_id).unwrap().thread.clone()
     });
@@ -5350,7 +5355,7 @@ async fn test_subagent_tool_output_does_not_include_thinking(cx: &mut TestAppCon
     });
     cx.run_until_parked();
 
-    let send = acp_thread.update(cx, |thread, cx| thread.send_raw("Prompt", cx));
+    let send = agent_thread.update(cx, |thread, cx| thread.send_raw("Prompt", cx));
     cx.run_until_parked();
     model.send_last_completion_stream_text_chunk("spawning subagent");
     let subagent_tool_input = SpawnAgentToolInput {
@@ -5386,7 +5391,7 @@ async fn test_subagent_tool_output_does_not_include_thinking(cx: &mut TestAppCon
             .sessions
             .get(&subagent_session_id)
             .expect("subagent session should exist")
-            .acp_thread
+            .agent_thread
             .clone()
     });
 
@@ -5426,7 +5431,7 @@ async fn test_subagent_tool_output_does_not_include_thinking(cx: &mut TestAppCon
     send.await.unwrap();
 
     assert_eq!(
-        acp_thread.read_with(cx, |thread, cx| thread.to_markdown(cx)),
+        agent_thread.read_with(cx, |thread, cx| thread.to_markdown(cx)),
         indoc! {r#"
             ## User
 
@@ -5477,7 +5482,7 @@ async fn test_subagent_tool_call_cancellation_during_task_prompt(cx: &mut TestAp
         cx.update(|cx| NativeAgent::new(thread_store.clone(), Templates::new(), fs.clone(), cx));
     let connection = Rc::new(NativeAgentConnection(agent.clone()));
 
-    let acp_thread = cx
+    let agent_thread = cx
         .update(|cx| {
             connection
                 .clone()
@@ -5485,7 +5490,7 @@ async fn test_subagent_tool_call_cancellation_during_task_prompt(cx: &mut TestAp
         })
         .await
         .unwrap();
-    let session_id = acp_thread.read_with(cx, |thread, _| thread.session_id().clone());
+    let session_id = agent_thread.read_with(cx, |thread, _| thread.session_id().clone());
     let thread = agent.read_with(cx, |agent, _| {
         agent.sessions.get(&session_id).unwrap().thread.clone()
     });
@@ -5497,7 +5502,7 @@ async fn test_subagent_tool_call_cancellation_during_task_prompt(cx: &mut TestAp
     });
     cx.run_until_parked();
 
-    let send = acp_thread.update(cx, |thread, cx| thread.send_raw("Prompt", cx));
+    let send = agent_thread.update(cx, |thread, cx| thread.send_raw("Prompt", cx));
     cx.run_until_parked();
     model.send_last_completion_stream_text_chunk("spawning subagent");
     let subagent_tool_input = SpawnAgentToolInput {
@@ -5527,12 +5532,12 @@ async fn test_subagent_tool_call_cancellation_during_task_prompt(cx: &mut TestAp
             .expect("subagent thread should be running")
             .clone()
     });
-    let subagent_acp_thread = agent.read_with(cx, |agent, _cx| {
+    let subagent_agent_thread = agent.read_with(cx, |agent, _cx| {
         agent
             .sessions
             .get(&subagent_session_id)
             .expect("subagent session should exist")
-            .acp_thread
+            .agent_thread
             .clone()
     });
 
@@ -5541,13 +5546,15 @@ async fn test_subagent_tool_call_cancellation_during_task_prompt(cx: &mut TestAp
 
     // cx.run_until_parked();
 
-    acp_thread.update(cx, |thread, cx| thread.cancel(cx)).await;
+    agent_thread
+        .update(cx, |thread, cx| thread.cancel(cx))
+        .await;
 
     cx.run_until_parked();
 
     send.await.unwrap();
 
-    acp_thread.read_with(cx, |thread, cx| {
+    agent_thread.read_with(cx, |thread, cx| {
         assert_eq!(thread.status(), ThreadStatus::Idle);
         assert_eq!(
             thread.to_markdown(cx),
@@ -5566,7 +5573,7 @@ async fn test_subagent_tool_call_cancellation_during_task_prompt(cx: &mut TestAp
             "}
         );
     });
-    subagent_acp_thread.read_with(cx, |thread, cx| {
+    subagent_agent_thread.read_with(cx, |thread, cx| {
         assert_eq!(thread.status(), ThreadStatus::Idle);
         assert_eq!(
             thread.to_markdown(cx),
@@ -5606,7 +5613,7 @@ async fn test_subagent_tool_resume_session(cx: &mut TestAppContext) {
         cx.update(|cx| NativeAgent::new(thread_store.clone(), Templates::new(), fs.clone(), cx));
     let connection = Rc::new(NativeAgentConnection(agent.clone()));
 
-    let acp_thread = cx
+    let agent_thread = cx
         .update(|cx| {
             connection
                 .clone()
@@ -5614,7 +5621,7 @@ async fn test_subagent_tool_resume_session(cx: &mut TestAppContext) {
         })
         .await
         .unwrap();
-    let session_id = acp_thread.read_with(cx, |thread, _| thread.session_id().clone());
+    let session_id = agent_thread.read_with(cx, |thread, _| thread.session_id().clone());
     let thread = agent.read_with(cx, |agent, _| {
         agent.sessions.get(&session_id).unwrap().thread.clone()
     });
@@ -5626,7 +5633,7 @@ async fn test_subagent_tool_resume_session(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     // === First turn: create subagent ===
-    let send = acp_thread.update(cx, |thread, cx| thread.send_raw("First prompt", cx));
+    let send = agent_thread.update(cx, |thread, cx| thread.send_raw("First prompt", cx));
     cx.run_until_parked();
     model.send_last_completion_stream_text_chunk("spawning subagent");
     let subagent_tool_input = SpawnAgentToolInput {
@@ -5657,12 +5664,12 @@ async fn test_subagent_tool_resume_session(cx: &mut TestAppContext) {
             .clone()
     });
 
-    let subagent_acp_thread = agent.read_with(cx, |agent, _cx| {
+    let subagent_agent_thread = agent.read_with(cx, |agent, _cx| {
         agent
             .sessions
             .get(&subagent_session_id)
             .expect("subagent session should exist")
-            .acp_thread
+            .agent_thread
             .clone()
     });
 
@@ -5687,7 +5694,7 @@ async fn test_subagent_tool_resume_session(cx: &mut TestAppContext) {
     });
 
     // === Second turn: resume subagent with session_id ===
-    let send2 = acp_thread.update(cx, |thread, cx| thread.send_raw("Follow up", cx));
+    let send2 = agent_thread.update(cx, |thread, cx| thread.send_raw("Follow up", cx));
     cx.run_until_parked();
     model.send_last_completion_stream_text_chunk("resuming subagent");
     let resume_tool_input = SpawnAgentToolInput {
@@ -5735,9 +5742,9 @@ async fn test_subagent_tool_resume_session(cx: &mut TestAppContext) {
         );
     });
 
-    // Verify the subagent's acp thread has both conversation turns
+    // Verify the subagent's protocol thread has both conversation turns
     assert_eq!(
-        subagent_acp_thread.read_with(cx, |thread, cx| thread.to_markdown(cx)),
+        subagent_agent_thread.read_with(cx, |thread, cx| thread.to_markdown(cx)),
         indoc! {"
             ## User
 
@@ -5921,7 +5928,7 @@ async fn test_max_subagent_depth_prevents_tool_registration(cx: &mut TestAppCont
             cx,
         );
         thread.set_subagent_context(SubagentContext {
-            parent_thread_id: acp::SessionId::new("parent-id"),
+            parent_thread_id: protocol::SessionId::new("parent-id"),
             depth: MAX_SUBAGENT_DEPTH - 1,
         });
         thread
@@ -6253,7 +6260,7 @@ async fn test_subagent_context_window_warning(cx: &mut TestAppContext) {
         cx.update(|cx| NativeAgent::new(thread_store.clone(), Templates::new(), fs.clone(), cx));
     let connection = Rc::new(NativeAgentConnection(agent.clone()));
 
-    let acp_thread = cx
+    let agent_thread = cx
         .update(|cx| {
             connection
                 .clone()
@@ -6261,7 +6268,7 @@ async fn test_subagent_context_window_warning(cx: &mut TestAppContext) {
         })
         .await
         .unwrap();
-    let session_id = acp_thread.read_with(cx, |thread, _| thread.session_id().clone());
+    let session_id = agent_thread.read_with(cx, |thread, _| thread.session_id().clone());
     let thread = agent.read_with(cx, |agent, _| {
         agent.sessions.get(&session_id).unwrap().thread.clone()
     });
@@ -6273,7 +6280,7 @@ async fn test_subagent_context_window_warning(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     // Start the parent turn
-    let send = acp_thread.update(cx, |thread, cx| thread.send_raw("Prompt", cx));
+    let send = agent_thread.update(cx, |thread, cx| thread.send_raw("Prompt", cx));
     cx.run_until_parked();
     model.send_last_completion_stream_text_chunk("spawning subagent");
     let subagent_tool_input = SpawnAgentToolInput {
@@ -6333,7 +6340,7 @@ async fn test_subagent_context_window_warning(cx: &mut TestAppContext) {
     send.await.unwrap();
 
     // Verify the parent thread shows the warning error in the tool call
-    let markdown = acp_thread.read_with(cx, |thread, cx| thread.to_markdown(cx));
+    let markdown = agent_thread.read_with(cx, |thread, cx| thread.to_markdown(cx));
     assert!(
         markdown.contains("nearing the end of its context window"),
         "tool output should contain context window warning message, got:\n{markdown}"
@@ -6378,7 +6385,7 @@ async fn test_subagent_no_context_window_warning_when_already_at_warning(cx: &mu
         cx.update(|cx| NativeAgent::new(thread_store.clone(), Templates::new(), fs.clone(), cx));
     let connection = Rc::new(NativeAgentConnection(agent.clone()));
 
-    let acp_thread = cx
+    let agent_thread = cx
         .update(|cx| {
             connection
                 .clone()
@@ -6386,7 +6393,7 @@ async fn test_subagent_no_context_window_warning_when_already_at_warning(cx: &mu
         })
         .await
         .unwrap();
-    let session_id = acp_thread.read_with(cx, |thread, _| thread.session_id().clone());
+    let session_id = agent_thread.read_with(cx, |thread, _| thread.session_id().clone());
     let thread = agent.read_with(cx, |agent, _| {
         agent.sessions.get(&session_id).unwrap().thread.clone()
     });
@@ -6398,7 +6405,7 @@ async fn test_subagent_no_context_window_warning_when_already_at_warning(cx: &mu
     cx.run_until_parked();
 
     // === First turn: create subagent, trigger context window warning ===
-    let send = acp_thread.update(cx, |thread, cx| thread.send_raw("First prompt", cx));
+    let send = agent_thread.update(cx, |thread, cx| thread.send_raw("First prompt", cx));
     cx.run_until_parked();
     model.send_last_completion_stream_text_chunk("spawning subagent");
     let subagent_tool_input = SpawnAgentToolInput {
@@ -6457,14 +6464,14 @@ async fn test_subagent_no_context_window_warning_when_already_at_warning(cx: &mu
 
     send.await.unwrap();
 
-    let markdown = acp_thread.read_with(cx, |thread, cx| thread.to_markdown(cx));
+    let markdown = agent_thread.read_with(cx, |thread, cx| thread.to_markdown(cx));
     assert!(
         markdown.contains("nearing the end of its context window"),
         "first turn should have context window warning, got:\n{markdown}"
     );
 
     // === Second turn: resume the same subagent (now at Warning level) ===
-    let send2 = acp_thread.update(cx, |thread, cx| thread.send_raw("Follow up", cx));
+    let send2 = agent_thread.update(cx, |thread, cx| thread.send_raw("Follow up", cx));
     cx.run_until_parked();
     model.send_last_completion_stream_text_chunk("resuming subagent");
     let resume_tool_input = SpawnAgentToolInput {
@@ -6509,7 +6516,7 @@ async fn test_subagent_no_context_window_warning_when_already_at_warning(cx: &mu
 
     // The resumed subagent should have completed normally since the ratio
     // didn't transition (it was Warning before and stayed at Warning)
-    let markdown = acp_thread.read_with(cx, |thread, cx| thread.to_markdown(cx));
+    let markdown = agent_thread.read_with(cx, |thread, cx| thread.to_markdown(cx));
     assert!(
         markdown.contains("follow-up task response"),
         "resumed subagent should complete normally when already at warning, got:\n{markdown}"
@@ -6551,7 +6558,7 @@ async fn test_subagent_error_propagation(cx: &mut TestAppContext) {
         cx.update(|cx| NativeAgent::new(thread_store.clone(), Templates::new(), fs.clone(), cx));
     let connection = Rc::new(NativeAgentConnection(agent.clone()));
 
-    let acp_thread = cx
+    let agent_thread = cx
         .update(|cx| {
             connection
                 .clone()
@@ -6559,7 +6566,7 @@ async fn test_subagent_error_propagation(cx: &mut TestAppContext) {
         })
         .await
         .unwrap();
-    let session_id = acp_thread.read_with(cx, |thread, _| thread.session_id().clone());
+    let session_id = agent_thread.read_with(cx, |thread, _| thread.session_id().clone());
     let thread = agent.read_with(cx, |agent, _| {
         agent.sessions.get(&session_id).unwrap().thread.clone()
     });
@@ -6571,7 +6578,7 @@ async fn test_subagent_error_propagation(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     // Start the parent turn
-    let send = acp_thread.update(cx, |thread, cx| thread.send_raw("Prompt", cx));
+    let send = agent_thread.update(cx, |thread, cx| thread.send_raw("Prompt", cx));
     cx.run_until_parked();
     model.send_last_completion_stream_text_chunk("spawning subagent");
     let subagent_tool_input = SpawnAgentToolInput {
@@ -6624,7 +6631,7 @@ async fn test_subagent_error_propagation(cx: &mut TestAppContext) {
     send.await.unwrap();
 
     // Verify the parent thread shows the error in the tool call
-    let markdown = acp_thread.read_with(cx, |thread, cx| thread.to_markdown(cx));
+    let markdown = agent_thread.read_with(cx, |thread, cx| thread.to_markdown(cx));
     assert!(
         markdown.contains("Status: Failed"),
         "tool call should have Failed status after model error, got:\n{markdown}"
@@ -7212,7 +7219,7 @@ async fn test_fetch_tool_prompts_for_ungranted_host(cx: &mut TestAppContext) {
 
     let authorization = rx.expect_authorization().await;
     let details =
-        acp_thread::sandbox_authorization_details_from_meta(&authorization.tool_call.meta)
+        agent_thread::sandbox_authorization_details_from_meta(&authorization.tool_call.meta)
             .expect("an ungranted host should request a sandbox network grant");
     assert_eq!(details.network_hosts, vec!["example.com".to_string()]);
     assert!(!details.network_all_hosts);
@@ -7388,9 +7395,9 @@ async fn test_always_allow_resolves_pending_authorizations(cx: &mut TestAppConte
     // authorization should resolve without user interaction.
     tool_call_auth_1
         .response
-        .send(acp_thread::SelectedPermissionOutcome::new(
-            acp::PermissionOptionId::new("always_allow:tool_requiring_permission"),
-            acp::PermissionOptionKind::AllowAlways,
+        .send(agent_thread::SelectedPermissionOutcome::new(
+            protocol::PermissionOptionId::new("always_allow:tool_requiring_permission"),
+            protocol::PermissionOptionKind::AllowAlways,
         ))
         .unwrap();
     cx.run_until_parked();
@@ -7399,9 +7406,9 @@ async fn test_always_allow_resolves_pending_authorizations(cx: &mut TestAppConte
     // sending a late response should fail.
     let late_send = tool_call_auth_2
         .response
-        .send(acp_thread::SelectedPermissionOutcome::new(
-            acp::PermissionOptionId::new("allow"),
-            acp::PermissionOptionKind::AllowOnce,
+        .send(agent_thread::SelectedPermissionOutcome::new(
+            protocol::PermissionOptionId::new("allow"),
+            protocol::PermissionOptionKind::AllowOnce,
         ));
     assert!(
         late_send.is_err(),
@@ -7480,9 +7487,9 @@ async fn test_external_settings_edit_resolves_pending_authorization(cx: &mut Tes
     // The pending prompt auto-resolves without the user clicking anything.
     let late_send = tool_call_auth
         .response
-        .send(acp_thread::SelectedPermissionOutcome::new(
-            acp::PermissionOptionId::new("allow"),
-            acp::PermissionOptionKind::AllowOnce,
+        .send(agent_thread::SelectedPermissionOutcome::new(
+            protocol::PermissionOptionId::new("allow"),
+            protocol::PermissionOptionKind::AllowOnce,
         ));
     assert!(
         late_send.is_err(),
@@ -7550,9 +7557,9 @@ async fn test_external_deny_rule_resolves_pending_authorization(cx: &mut TestApp
 
     let late_send = tool_call_auth
         .response
-        .send(acp_thread::SelectedPermissionOutcome::new(
-            acp::PermissionOptionId::new("allow"),
-            acp::PermissionOptionKind::AllowOnce,
+        .send(agent_thread::SelectedPermissionOutcome::new(
+            protocol::PermissionOptionId::new("allow"),
+            protocol::PermissionOptionKind::AllowOnce,
         ));
     assert!(
         late_send.is_err(),
@@ -7619,9 +7626,9 @@ async fn test_unrelated_settings_change_does_not_resolve_pending_authorization(
     // The user still has to act — resolve with an Allow Once.
     tool_call_auth
         .response
-        .send(acp_thread::SelectedPermissionOutcome::new(
-            acp::PermissionOptionId::new("allow"),
-            acp::PermissionOptionKind::AllowOnce,
+        .send(agent_thread::SelectedPermissionOutcome::new(
+            protocol::PermissionOptionId::new("allow"),
+            protocol::PermissionOptionKind::AllowOnce,
         ))
         .expect("response receiver should still be alive");
     cx.run_until_parked();
@@ -7698,9 +7705,9 @@ async fn test_always_allow_does_not_resolve_unrelated_tool_authorization(cx: &mu
     // Approve tool 1 with "always allow". Only tool 1's rule is persisted.
     auth_for_tool_1
         .response
-        .send(acp_thread::SelectedPermissionOutcome::new(
-            acp::PermissionOptionId::new("always_allow:tool_requiring_permission"),
-            acp::PermissionOptionKind::AllowAlways,
+        .send(agent_thread::SelectedPermissionOutcome::new(
+            protocol::PermissionOptionId::new("always_allow:tool_requiring_permission"),
+            protocol::PermissionOptionKind::AllowAlways,
         ))
         .unwrap();
     cx.run_until_parked();
@@ -7709,9 +7716,9 @@ async fn test_always_allow_does_not_resolve_unrelated_tool_authorization(cx: &mu
     // to the rule that was just added, so its prompt stays pending.
     auth_for_tool_2
         .response
-        .send(acp_thread::SelectedPermissionOutcome::new(
-            acp::PermissionOptionId::new("allow"),
-            acp::PermissionOptionKind::AllowOnce,
+        .send(agent_thread::SelectedPermissionOutcome::new(
+            protocol::PermissionOptionId::new("allow"),
+            protocol::PermissionOptionKind::AllowOnce,
         ))
         .expect("tool 2's response receiver should still be alive");
     cx.run_until_parked();
@@ -7802,7 +7809,7 @@ async fn test_queued_message_ends_turn_at_boundary(cx: &mut TestAppContext) {
     let stop_reasons = stop_events(all_events);
     assert_eq!(
         stop_reasons,
-        vec![acp::StopReason::EndTurn],
+        vec![protocol::StopReason::EndTurn],
         "Turn should have ended after tool completion due to queued message"
     );
 
@@ -7880,7 +7887,7 @@ async fn test_queued_message_does_not_end_turn_without_boundary_flag(cx: &mut Te
     let stop_reasons = stop_events(all_events);
     assert_eq!(
         stop_reasons,
-        vec![acp::StopReason::EndTurn],
+        vec![protocol::StopReason::EndTurn],
         "Turn should end only after the agent finishes, not at the tool boundary"
     );
 }

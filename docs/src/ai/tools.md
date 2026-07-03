@@ -1,11 +1,11 @@
 ---
 title: AI Agent Tools - Zed
-description: Built-in tools for Zed's AI agent including file editing, code search, terminal commands, web search, skills, and diagnostics.
+description: Built-in tools for supported Zed agent integrations, including file editing, code search, terminal commands, web search, skills, and diagnostics.
 ---
 
 # Tools
 
-Zed's built-in agent has access to these tools for reading, searching, and editing your codebase. These tools are used in the [Agent Panel](./agent-panel.md) during conversations with AI agents.
+Supported Agent Panel integrations can use Zed-managed tools for reading, searching, and editing your codebase.
 
 The exact tool list can vary by [Agent Profile](./agent-profiles.md), selected model provider, and Zed version.
 
@@ -13,9 +13,9 @@ You can configure permissions for tool actions, including situations where they 
 
 To add custom tools beyond these built-in ones, see [MCP servers](./mcp.md).
 
-To choose which built-in tools and MCP tools are available in a Zed Agent thread, use [Agent Profiles](./agent-profiles.md). Profiles control tool availability; tool permissions control allow, deny, and confirm behavior.
+To choose which built-in tools and MCP tools are available where supported, use [Agent Profiles](./agent-profiles.md). Profiles control tool availability; tool permissions control allow, deny, and confirm behavior.
 
-The terminal tool can also run with additional OS-level restrictions when [Zed Agent sandboxing](./sandboxing.md) is enabled.
+The terminal tool can also run with additional OS-level restrictions when [agent sandboxing](./sandboxing.md) is enabled.
 
 ## Read & Search Tools
 

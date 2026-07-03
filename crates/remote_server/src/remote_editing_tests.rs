@@ -3002,7 +3002,7 @@ async fn test_remote_agent_fs_tool_calls(cx: &mut TestAppContext, server_cx: &mu
 
 #[gpui::test]
 async fn test_adding_remote_skill(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
-    use acp_thread::AgentConnection as _;
+    use agent_thread::AgentConnection as _;
 
     let fs = FakeFs::new(server_cx.executor());
     fs.insert_tree(
@@ -3033,7 +3033,7 @@ async fn test_adding_remote_skill(cx: &mut TestAppContext, server_cx: &mut TestA
     let thread_store = cx.new(|cx| ThreadStore::new(cx));
     let agent = cx.update(|cx| NativeAgent::new(thread_store, Templates::new(), fs.clone(), cx));
     let connection = Rc::new(NativeAgentConnection(agent.clone()));
-    let _acp_thread = cx
+    let _agent_thread = cx
         .update(|cx| {
             connection.clone().new_session(
                 project.clone(),
@@ -3065,9 +3065,9 @@ async fn test_adding_remote_skill(cx: &mut TestAppContext, server_cx: &mut TestA
     let authorization = event_stream_rx.expect_authorization().await;
     authorization
         .response
-        .send(acp_thread::SelectedPermissionOutcome::new(
-            agent_client_protocol::schema::v1::PermissionOptionId::new("allow"),
-            agent_client_protocol::schema::v1::PermissionOptionKind::AllowOnce,
+        .send(agent_thread::SelectedPermissionOutcome::new(
+            agent_thread::protocol::PermissionOptionId::new("allow"),
+            agent_thread::protocol::PermissionOptionKind::AllowOnce,
         ))
         .unwrap();
 
@@ -3115,9 +3115,9 @@ async fn test_adding_remote_skill(cx: &mut TestAppContext, server_cx: &mut TestA
     let authorization = event_stream_rx.expect_authorization().await;
     authorization
         .response
-        .send(acp_thread::SelectedPermissionOutcome::new(
-            agent_client_protocol::schema::v1::PermissionOptionId::new("allow"),
-            agent_client_protocol::schema::v1::PermissionOptionKind::AllowOnce,
+        .send(agent_thread::SelectedPermissionOutcome::new(
+            agent_thread::protocol::PermissionOptionId::new("allow"),
+            agent_thread::protocol::PermissionOptionKind::AllowOnce,
         ))
         .unwrap();
 

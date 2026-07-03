@@ -242,32 +242,39 @@ impl Render for EditPredictionButton {
                         .with_handle(self.popover_menu_handle.clone()),
                 )
             }
-            EditPredictionProvider::OpenAiCompatibleApi => {
+            provider @ (EditPredictionProvider::OpenAiCompatibleApi
+            | EditPredictionProvider::Groq
+            | EditPredictionProvider::Cerebras) => {
                 let enabled = self.editor_enabled.unwrap_or(true);
                 let this = cx.weak_entity();
+                let provider_id = match provider {
+                    EditPredictionProvider::OpenAiCompatibleApi => "openai-compatible-api",
+                    EditPredictionProvider::Groq => "groq",
+                    EditPredictionProvider::Cerebras => "cerebras",
+                    _ => "openai-compatible-api",
+                };
 
                 div().child(
-                    PopoverMenu::new("openai-compatible-api")
+                    PopoverMenu::new(provider_id)
                         .menu(move |window, cx| {
                             this.update(cx, |this, cx| {
-                                this.build_edit_prediction_context_menu(
-                                    EditPredictionProvider::OpenAiCompatibleApi,
-                                    window,
-                                    cx,
-                                )
+                                this.build_edit_prediction_context_menu(provider, window, cx)
                             })
                             .ok()
                         })
                         .anchor(Anchor::BottomRight)
                         .trigger(
-                            IconButton::new("openai-compatible-api-icon", IconName::AiOpenAiCompat)
-                                .shape(IconButtonShape::Square)
-                                .when(!enabled, |this| {
-                                    this.indicator(Indicator::dot().color(Color::Ignored))
-                                        .indicator_border_color(Some(
-                                            cx.theme().colors().status_bar_background,
-                                        ))
-                                }),
+                            IconButton::new(
+                                format!("{provider_id}-icon"),
+                                IconName::AiOpenAiCompat,
+                            )
+                            .shape(IconButtonShape::Square)
+                            .when(!enabled, |this| {
+                                this.indicator(Indicator::dot().color(Color::Ignored))
+                                    .indicator_border_color(Some(
+                                        cx.theme().colors().status_bar_background,
+                                    ))
+                            }),
                         )
                         .with_handle(self.popover_menu_handle.clone()),
                 )
@@ -536,9 +543,31 @@ impl EditPredictionButton {
         let mercury_api_token_task = edit_prediction::mercury::load_mercury_api_token(cx);
         let open_ai_compatible_api_token_task =
             edit_prediction::open_ai_compatible::load_open_ai_compatible_api_token(cx);
+        let groq_api_token_task = edit_prediction::open_ai_compatible::load_provider_api_token(
+            EditPredictionProvider::Groq,
+            cx,
+        );
+        let cerebras_api_token_task = edit_prediction::open_ai_compatible::load_provider_api_token(
+            EditPredictionProvider::Cerebras,
+            cx,
+        );
 
         cx.spawn(async move |this, cx| {
-            _ = futures::join!(mercury_api_token_task, open_ai_compatible_api_token_task);
+            let (
+                mercury_api_token_result,
+                open_ai_compatible_api_token_result,
+                groq_api_token_result,
+                cerebras_api_token_result,
+            ) = futures::join!(
+                mercury_api_token_task,
+                open_ai_compatible_api_token_task,
+                groq_api_token_task,
+                cerebras_api_token_task
+            );
+            mercury_api_token_result.log_err();
+            open_ai_compatible_api_token_result.log_err();
+            groq_api_token_result.log_err();
+            cerebras_api_token_result.log_err();
             this.update(cx, |_, cx| {
                 cx.notify();
             })
@@ -1071,6 +1100,7 @@ impl EditPredictionButton {
     ) -> Entity<ContextMenu> {
         ContextMenu::build(window, cx, |mut menu, window, cx| {
             let user = self.user_store.read(cx).current_user();
+            let zed_account_auth_disabled = client::zed_account_auth_disabled(cx);
 
             let needs_sign_in = user.is_none()
                 && matches!(
@@ -1098,8 +1128,15 @@ impl EditPredictionButton {
                             )
                             .into_any_element()
                     })
-                    .separator()
-                    .entry("Sign In & Start Using", None, |window, cx| {
+                    .separator();
+
+                if zed_account_auth_disabled {
+                    menu = menu.item(
+                        ContextMenuEntry::new("Zed account sign-in is disabled in Zed Dev")
+                            .disabled(true),
+                    );
+                } else {
+                    menu = menu.entry("Sign In & Start Using", None, |window, cx| {
                         telemetry::event!(
                             "Edit Prediction Menu Action",
                             action = "sign_in",
@@ -1114,7 +1151,10 @@ impl EditPredictionButton {
                                     .log_err();
                             })
                             .detach();
-                    })
+                    });
+                }
+
+                menu = menu
                     .link_with_handler(
                         "Learn More",
                         OpenBrowser {
@@ -1470,6 +1510,22 @@ pub fn get_available_providers(cx: &mut App) -> Vec<EditPredictionProvider> {
         .is_some()
     {
         providers.push(EditPredictionProvider::OpenAiCompatibleApi);
+    }
+
+    if all_language_settings(None, cx)
+        .edit_predictions
+        .groq
+        .is_some()
+    {
+        providers.push(EditPredictionProvider::Groq);
+    }
+
+    if all_language_settings(None, cx)
+        .edit_predictions
+        .cerebras
+        .is_some()
+    {
+        providers.push(EditPredictionProvider::Cerebras);
     }
 
     if edit_prediction::mercury::mercury_api_token(cx)

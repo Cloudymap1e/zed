@@ -5153,7 +5153,7 @@ impl BackgroundScanner {
 
                     new_jobs.push(Some(ScanJob {
                         abs_path: child_abs_path.clone(),
-                        path: child_path,
+                        path: child_path.clone(),
                         is_external: child_entry.is_external,
                         ignore_stack: if child_entry.is_ignored {
                             IgnoreStack::all()
@@ -5171,15 +5171,12 @@ impl BackgroundScanner {
             }
 
             {
-                let relative_path = job
-                    .path
-                    .join(RelPath::unix(child_name.to_str().unwrap()).unwrap());
-                if self.is_path_private(&relative_path) {
-                    log::debug!("detected private file: {relative_path:?}");
+                if self.is_path_private(&child_path) {
+                    log::debug!("detected private file: {child_path:?}");
                     child_entry.is_private = true;
                 }
-                if self.settings.is_path_hidden(&relative_path) {
-                    log::debug!("detected hidden file: {relative_path:?}");
+                if self.settings.is_path_hidden(&child_path) {
+                    log::debug!("detected hidden file: {child_path:?}");
                     child_entry.is_hidden = true;
                 }
             }

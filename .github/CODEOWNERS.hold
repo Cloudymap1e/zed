@@ -24,8 +24,6 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 /assets/prompts/ @zed-industries/ai-team
-/crates/acp_thread/ @zed-industries/ai-team
-/crates/acp_tools/ @zed-industries/ai-team
 /crates/agent/ @zed-industries/ai-team
 /crates/agent_servers/ @zed-industries/ai-team
 /crates/agent_settings/ @zed-industries/ai-team

@@ -376,7 +376,7 @@ impl AgentServerStore {
                 CustomAgentServerSettings::Registry { env, .. } => {
                     let Some(agent) = registry_agents_by_id.get(name) else {
                         if registry_store.is_some() {
-                            log::debug!("Registry agent '{}' not found in ACP registry", name);
+                            log::debug!("Registry agent '{}' not found in agent registry", name);
                         }
                         continue;
                     };
@@ -894,7 +894,7 @@ impl ExternalAgentServer for RemoteExternalAgentServer {
 #[derive(Debug, PartialEq, Eq)]
 enum RegistryArchiveKind {
     Archive(AssetKind),
-    /// The archive URL points directly at an executable, per the ACP registry
+    /// The archive URL points directly at an executable, per the agent registry
     /// schema: "URL to download archive (.zip, .tar.gz, .tgz, .tar.bz2, .tbz2,
     /// or raw binary)".
     RawBinary {

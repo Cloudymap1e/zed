@@ -7,7 +7,7 @@ use super::edit_session::{
 };
 use crate::{AgentTool, Thread, ToolCallEventStream, ToolInput, ToolInputPayload};
 use action_log::ActionLog;
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::protocol;
 use anyhow::Result;
 use futures::FutureExt as _;
 use gpui::{App, AsyncApp, Entity, Task, WeakEntity};
@@ -231,8 +231,8 @@ impl AgentTool for EditFileTool {
         true
     }
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Edit
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Edit
     }
 
     fn initial_title(
@@ -514,9 +514,9 @@ mod tests {
             "Authorization title should mention agent skills, got: {title}",
         );
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("allow"),
-                acp::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("allow"),
+                protocol::PermissionOptionKind::AllowOnce,
             ))
             .expect("authorization response should send");
 
@@ -567,7 +567,7 @@ mod tests {
             use futures::StreamExt as _;
             while let Some(event) = receiver.next().await {
                 let Ok(crate::ThreadEvent::ToolCallUpdate(
-                    acp_thread::ToolCallUpdate::UpdateFields(update),
+                    agent_thread::ToolCallUpdate::UpdateFields(update),
                 )) = event
                 else {
                     continue;
@@ -576,8 +576,8 @@ mod tests {
                     continue;
                 };
                 for item in content {
-                    if let acp::ToolCallContent::Content(c) = item
-                        && let acp::ContentBlock::Text(text) = c.content
+                    if let protocol::ToolCallContent::Content(c) = item
+                        && let protocol::ContentBlock::Text(text) = c.content
                     {
                         return Some(text.text);
                     }
@@ -1324,13 +1324,13 @@ mod tests {
         assert!(
             event
                 .options
-                .first_option_of_kind(acp::PermissionOptionKind::AllowAlways)
+                .first_option_of_kind(protocol::PermissionOptionKind::AllowAlways)
                 .is_none(),
             "agent skills prompt must not offer an \"Always allow\" option: {:?}",
             event.options,
         );
         assert!(
-            matches!(event.options, acp_thread::PermissionOptions::Flat(_)),
+            matches!(event.options, agent_thread::PermissionOptions::Flat(_)),
             "agent skills prompt should use flat allow/deny options: {:?}",
             event.options,
         );
@@ -1555,9 +1555,9 @@ mod tests {
 
         event
             .response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("allow"),
-                acp::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("allow"),
+                protocol::PermissionOptionKind::AllowOnce,
             ))
             .unwrap();
         authorize_task.await.unwrap();
@@ -2278,11 +2278,12 @@ mod tests {
         let _update = stream_rx.expect_update_fields().await;
         let auth = stream_rx.expect_authorization().await;
         let content = auth.tool_call.fields.content.as_deref().unwrap_or(&[]);
-        let acp::ToolCallContent::Content(text) = content.first().expect("expected message body")
+        let protocol::ToolCallContent::Content(text) =
+            content.first().expect("expected message body")
         else {
             panic!("expected text body, got: {:?}", content.first());
         };
-        let acp::ContentBlock::Text(text) = &text.content else {
+        let protocol::ContentBlock::Text(text) = &text.content else {
             panic!("expected text body, got: {:?}", text.content);
         };
         assert!(
@@ -2293,9 +2294,9 @@ mod tests {
             text.text,
         );
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("save"),
-                acp::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("save"),
+                protocol::PermissionOptionKind::AllowOnce,
             ))
             .unwrap();
 
@@ -2370,9 +2371,9 @@ mod tests {
         let _update = stream_rx.expect_update_fields().await;
         let auth = stream_rx.expect_authorization().await;
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("discard"),
-                acp::PermissionOptionKind::RejectOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("discard"),
+                protocol::PermissionOptionKind::RejectOnce,
             ))
             .unwrap();
 
@@ -2458,8 +2459,11 @@ mod tests {
         // The prompt's response channel should drop without a click; the
         // tool dismisses the prompt by resolving the pending authorization.
         let (_, outcome) = stream_rx.expect_authorization_resolved().await;
-        assert_eq!(outcome.option_id, acp::PermissionOptionId::new("save"));
-        assert_eq!(outcome.option_kind, acp::PermissionOptionKind::AllowOnce);
+        assert_eq!(outcome.option_id, protocol::PermissionOptionId::new("save"));
+        assert_eq!(
+            outcome.option_kind,
+            protocol::PermissionOptionKind::AllowOnce
+        );
         drop(auth);
 
         let EditFileToolOutput::Success { new_text, .. } = task.await.unwrap() else {

@@ -40,8 +40,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use ::ui::IconName;
-use agent_client_protocol::schema::v1 as acp;
+use agent_servers::CODEX_ID;
 use agent_settings::{AgentProfileId, AgentSettings};
+use agent_thread::protocol;
 use command_palette_hooks::CommandPaletteFilter;
 use editor::{Editor, SelectionEffects, scroll::Autoscroll};
 use feature_flags::FeatureFlagAppExt as _;
@@ -63,12 +64,12 @@ use rope::Point;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::{LanguageModelSelection, Settings as _, SettingsStore, SidebarSide};
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::path::{Path, PathBuf};
 use workspace::Workspace;
 
 use crate::agent_configuration::ManageProfilesModal;
-pub use crate::agent_connection_store::{ActiveAcpConnection, AgentConnectionStore};
+pub use crate::agent_connection_store::{ActiveExternalAgentConnection, AgentConnectionStore};
 pub use crate::agent_panel::{
     AgentPanel, AgentPanelEvent, AgentPanelTerminalInfo, MaxIdleRetainedThreads, TerminalId,
     ThreadTitleRegenerationResult,
@@ -85,7 +86,7 @@ pub(crate) use mode_selector::ModeSelector;
 pub(crate) use model_selector::ModelSelector;
 pub(crate) use model_selector_popover::ModelSelectorPopover;
 pub use thread_import::{
-    AcpThreadImportOnboarding, CrossChannelImportOnboarding, ThreadImportModal,
+    AgentThreadImportOnboarding, CrossChannelImportOnboarding, ThreadImportModal,
     channels_with_threads, import_threads_from_other_channels,
 };
 use zed_actions;
@@ -192,7 +193,7 @@ actions!(
         ToggleProfileSelector,
         /// Cycles through available session modes.
         CycleModeSelector,
-        /// Cycles through favorited models in the ACP model selector.
+        /// Cycles through favorited models in the External Agent model selector.
         CycleFavoriteModels,
         /// Expands the message editor to full size.
         ExpandMessageEditor,
@@ -376,27 +377,23 @@ where
 
     match AgentIdOrLegacyAgent::deserialize(deserializer)? {
         AgentIdOrLegacyAgent::AgentId(agent_id) => Ok(agent_id),
-        AgentIdOrLegacyAgent::LegacyAgent(Agent::Custom { id }) => Ok(id),
-        AgentIdOrLegacyAgent::LegacyAgent(Agent::NativeAgent) => Ok(Agent::NativeAgent.id()),
-        #[cfg(any(test, feature = "test-support"))]
-        AgentIdOrLegacyAgent::LegacyAgent(Agent::Stub) => Ok(Agent::Stub.id()),
+        AgentIdOrLegacyAgent::LegacyAgent(agent) => {
+            let agent_id = agent.id();
+            if agent_id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
+                Err(serde::de::Error::custom(
+                    "Zed Agent has been removed; use an External Agent id",
+                ))
+            } else {
+                Ok(agent_id)
+            }
+        }
     }
 }
 
-#[derive(Clone, PartialEq, Deserialize, JsonSchema, Action)]
-#[action(namespace = agent)]
-#[serde(deny_unknown_fields)]
-pub struct NewNativeAgentThreadFromSummary {
-    from_session_id: acp::SessionId,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Agent {
-    #[default]
-    #[serde(alias = "NativeAgent", alias = "TextThread")]
-    NativeAgent,
     #[serde(alias = "Custom")]
     Custom {
         #[serde(rename = "name")]
@@ -406,11 +403,56 @@ pub enum Agent {
     Stub,
 }
 
+impl Default for Agent {
+    fn default() -> Self {
+        Self::Custom {
+            id: CODEX_ID.into(),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Agent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum DeserializedAgentVariant {
+            #[serde(alias = "NativeAgent", alias = "TextThread")]
+            NativeAgent,
+            #[serde(alias = "Custom")]
+            Custom {
+                #[serde(rename = "name")]
+                id: AgentId,
+            },
+            #[cfg(any(test, feature = "test-support"))]
+            Stub,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum DeserializedAgent {
+            Variant(DeserializedAgentVariant),
+            Id(AgentId),
+        }
+
+        match DeserializedAgent::deserialize(deserializer)? {
+            DeserializedAgent::Variant(DeserializedAgentVariant::NativeAgent) => {
+                Ok(Self::removed_native_agent())
+            }
+            DeserializedAgent::Variant(DeserializedAgentVariant::Custom { id }) => {
+                Ok(Self::Custom { id })
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            DeserializedAgent::Variant(DeserializedAgentVariant::Stub) => Ok(Self::Stub),
+            DeserializedAgent::Id(id) => Ok(Self::from(id)),
+        }
+    }
+}
+
 impl From<AgentId> for Agent {
     fn from(id: AgentId) -> Self {
-        if id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
-            return Self::NativeAgent;
-        }
         #[cfg(any(test, feature = "test-support"))]
         if id.as_ref() == "stub" {
             return Self::Stub;
@@ -420,22 +462,37 @@ impl From<AgentId> for Agent {
 }
 
 impl Agent {
+    fn removed_native_agent() -> Self {
+        Self::Custom {
+            id: agent::ZED_AGENT_ID.clone(),
+        }
+    }
+
     pub fn id(&self) -> AgentId {
         match self {
-            Self::NativeAgent => agent::ZED_AGENT_ID.clone(),
             Self::Custom { id } => id.clone(),
             #[cfg(any(test, feature = "test-support"))]
             Self::Stub => "stub".into(),
         }
     }
 
+    pub(crate) fn custom_id(&self) -> Option<&AgentId> {
+        match self {
+            Self::Custom { id } => Some(id),
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Stub => None,
+        }
+    }
+
     pub fn is_native(&self) -> bool {
-        matches!(self, Self::NativeAgent)
+        self.id().as_ref() == agent::ZED_AGENT_ID.as_ref()
     }
 
     pub fn label(&self) -> SharedString {
+        if self.is_native() {
+            return "Removed Agent".into();
+        }
         match self {
-            Self::NativeAgent => "Zed Agent".into(),
             Self::Custom { id, .. } => id.0.clone(),
             #[cfg(any(test, feature = "test-support"))]
             Self::Stub => "Stub Agent".into(),
@@ -443,8 +500,10 @@ impl Agent {
     }
 
     pub fn icon(&self) -> Option<IconName> {
+        if self.is_native() {
+            return None;
+        }
         match self {
-            Self::NativeAgent => None,
             Self::Custom { .. } => Some(IconName::Sparkle),
             #[cfg(any(test, feature = "test-support"))]
             Self::Stub => None,
@@ -453,11 +512,13 @@ impl Agent {
 
     pub fn server(
         &self,
-        fs: Arc<dyn fs::Fs>,
-        thread_store: Entity<agent::ThreadStore>,
+        _fs: Arc<dyn fs::Fs>,
+        _thread_store: Entity<agent::ThreadStore>,
     ) -> Rc<dyn agent_servers::AgentServer> {
         match self {
-            Self::NativeAgent => Rc::new(agent::NativeAgentServer::new(fs, thread_store)),
+            Self::Custom { id } if id.as_ref() == agent::ZED_AGENT_ID.as_ref() => {
+                Rc::new(UnavailableAgentServer::new(id.clone()))
+            }
             Self::Custom { id: name } => {
                 Rc::new(agent_servers::CustomAgentServer::new(name.clone()))
             }
@@ -467,14 +528,49 @@ impl Agent {
     }
 }
 
+struct UnavailableAgentServer {
+    agent_id: AgentId,
+}
+
+impl UnavailableAgentServer {
+    fn new(agent_id: AgentId) -> Self {
+        Self { agent_id }
+    }
+}
+
+impl agent_servers::AgentServer for UnavailableAgentServer {
+    fn logo(&self) -> IconName {
+        IconName::ZedAgent
+    }
+
+    fn agent_id(&self) -> AgentId {
+        self.agent_id.clone()
+    }
+
+    fn connect(
+        &self,
+        _delegate: agent_servers::AgentServerDelegate,
+        _project: Entity<project::Project>,
+        _cx: &mut App,
+    ) -> gpui::Task<anyhow::Result<Rc<dyn agent_thread::AgentConnection>>> {
+        gpui::Task::ready(Err(anyhow::anyhow!(agent_thread::LoadError::Other(
+            "Zed Agent has been removed".into()
+        ))))
+    }
+
+    fn into_any(self: Rc<Self>) -> Rc<dyn Any> {
+        self
+    }
+}
+
 /// Content to initialize new external agent with.
 pub enum AgentInitialContent {
     ThreadSummary {
-        session_id: acp::SessionId,
+        session_id: protocol::SessionId,
         title: Option<SharedString>,
     },
     ContentBlock {
-        blocks: Vec<acp::ContentBlock>,
+        blocks: Vec<protocol::ContentBlock>,
         auto_submit: bool,
     },
     FromExternalSource(ExternalSourcePrompt),
@@ -594,7 +690,7 @@ pub fn init(
     cx.observe_new(|workspace: &mut Workspace, _window, _cx| {
         workspace.register_action(
             move |workspace: &mut Workspace,
-                  _: &zed_actions::AcpRegistry,
+                  _: &zed_actions::AgentRegistry,
                   window: &mut Window,
                   cx: &mut Context<Workspace>| {
                 let existing = workspace
@@ -823,6 +919,8 @@ fn update_command_palette_filter(cx: &mut App) {
                 | EditPredictionProvider::Codestral
                 | EditPredictionProvider::Ollama
                 | EditPredictionProvider::OpenAiCompatibleApi
+                | EditPredictionProvider::Groq
+                | EditPredictionProvider::Cerebras
                 | EditPredictionProvider::Mercury => {
                     filter.show_namespace("edit_prediction");
                     filter.hide_namespace("copilot");
@@ -1188,8 +1286,20 @@ mod tests {
     #[test]
     fn test_deserialize_external_agent_variants() {
         assert_eq!(
+            Agent::default(),
+            Agent::Custom {
+                id: CODEX_ID.into(),
+            },
+        );
+        assert_eq!(
             serde_json::from_str::<Agent>(r#""NativeAgent""#).unwrap(),
-            Agent::NativeAgent,
+            Agent::from(agent::ZED_AGENT_ID.clone()),
+        );
+        assert_eq!(
+            serde_json::from_str::<Agent>(r#""test-external-agent""#).unwrap(),
+            Agent::Custom {
+                id: "test-external-agent".into(),
+            },
         );
         assert_eq!(
             serde_json::from_str::<Agent>(r#"{"Custom":{"name":"my-agent"}}"#).unwrap(),
@@ -1197,6 +1307,20 @@ mod tests {
                 id: "my-agent".into(),
             },
         );
+
+        let action =
+            serde_json::from_str::<NewExternalAgentThread>(r#"{"agent":"test-external-agent"}"#)
+                .unwrap();
+        assert_eq!(action.agent, AgentId::from("test-external-agent"));
+
+        let action =
+            NewExternalAgentThread::build(serde_json::json!({ "agent": "test-external-agent" }))
+                .unwrap();
+        let action = action
+            .as_any()
+            .downcast_ref::<NewExternalAgentThread>()
+            .unwrap();
+        assert_eq!(action.agent, AgentId::from("test-external-agent"));
     }
 
     #[test]
@@ -1211,9 +1335,10 @@ mod tests {
         .expect("should deserialize legacy custom agent payload");
         assert_eq!(action.agent, AgentId::from("gemini"));
 
-        let action = serde_json::from_str::<NewExternalAgentThread>(r#"{"agent":"NativeAgent"}"#)
-            .expect("should deserialize legacy native agent payload");
-        assert_eq!(action.agent, Agent::NativeAgent.id());
+        assert!(
+            serde_json::from_str::<NewExternalAgentThread>(r#"{"agent":"NativeAgent"}"#).is_err(),
+            "removed legacy payloads should not be accepted for external-agent actions"
+        );
 
         assert!(serde_json::from_str::<NewExternalAgentThread>(r#"{}"#).is_err());
     }

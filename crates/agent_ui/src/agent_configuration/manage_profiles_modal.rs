@@ -123,10 +123,7 @@ impl ManageProfilesModal {
         workspace.register_action(|workspace, action: &ManageProfiles, window, cx| {
             if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
                 let fs = workspace.app_state().fs.clone();
-                let active_model = panel
-                    .read(cx)
-                    .active_native_agent_thread(cx)
-                    .and_then(|thread| thread.read(cx).model().cloned());
+                let active_model = None;
 
                 let context_server_registry = panel.read(cx).context_server_registry().clone();
                 workspace.toggle_modal(window, cx, |window, cx| {

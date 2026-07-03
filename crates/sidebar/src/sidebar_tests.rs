@@ -1,6 +1,6 @@
 use super::*;
-use acp_thread::{AcpThread, PermissionOptions, StubAgentConnection};
 use agent::ThreadStore;
+use agent_thread::{AgentThread, PermissionOptions, StubAgentConnection};
 use agent_ui::{
     ThreadId,
     terminal_thread_metadata_store::{
@@ -42,7 +42,7 @@ fn init_test(cx: &mut TestAppContext) {
 }
 
 #[track_caller]
-fn assert_active_thread(sidebar: &Sidebar, session_id: &acp::SessionId, msg: &str) {
+fn assert_active_thread(sidebar: &Sidebar, session_id: &protocol::SessionId, msg: &str) {
     let active = sidebar.active_entry.as_ref();
     let matches = active.is_some_and(|entry| {
         matches!(entry, ActiveEntry::Thread { session_id: Some(active_session_id), .. } if active_session_id == session_id)
@@ -60,7 +60,7 @@ fn assert_active_thread(sidebar: &Sidebar, session_id: &acp::SessionId, msg: &st
 }
 
 #[track_caller]
-fn is_active_session(sidebar: &Sidebar, session_id: &acp::SessionId) -> bool {
+fn is_active_session(sidebar: &Sidebar, session_id: &protocol::SessionId) -> bool {
     let thread_id = sidebar
         .contents
         .entries
@@ -90,7 +90,7 @@ fn assert_active_draft(sidebar: &Sidebar, workspace: &Entity<Workspace>, msg: &s
     );
 }
 
-fn has_thread_entry(sidebar: &Sidebar, session_id: &acp::SessionId) -> bool {
+fn has_thread_entry(sidebar: &Sidebar, session_id: &protocol::SessionId) -> bool {
     sidebar
         .contents
         .entries
@@ -129,8 +129,8 @@ fn assert_project_header_has_threads(
 #[track_caller]
 fn assert_remote_project_integration_sidebar_state(
     sidebar: &mut Sidebar,
-    main_thread_id: &acp::SessionId,
-    remote_thread_id: &acp::SessionId,
+    main_thread_id: &protocol::SessionId,
+    remote_thread_id: &protocol::SessionId,
 ) {
     let mut project_headers = sidebar.contents.entries.iter().filter_map(|entry| {
         if let ListEntry::ProjectHeader { label, .. } = entry {
@@ -245,7 +245,7 @@ async fn save_n_test_threads(
 ) {
     for i in 0..count {
         save_thread_metadata(
-            acp::SessionId::new(Arc::from(format!("thread-{}", i))),
+            protocol::SessionId::new(Arc::from(format!("thread-{}", i))),
             Some(format!("Thread {}", i + 1).into()),
             chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, i).unwrap(),
             None,
@@ -258,7 +258,7 @@ async fn save_n_test_threads(
 }
 
 async fn save_test_thread_metadata(
-    session_id: &acp::SessionId,
+    session_id: &protocol::SessionId,
     project: &Entity<project::Project>,
     cx: &mut TestAppContext,
 ) {
@@ -280,7 +280,7 @@ async fn save_named_thread_metadata(
     cx: &mut gpui::VisualTestContext,
 ) {
     save_thread_metadata(
-        acp::SessionId::new(Arc::from(session_id)),
+        protocol::SessionId::new(Arc::from(session_id)),
         Some(SharedString::from(title.to_string())),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, 0).unwrap(),
         None,
@@ -385,7 +385,7 @@ async fn start_remote_project(
 }
 
 fn save_thread_metadata(
-    session_id: acp::SessionId,
+    session_id: protocol::SessionId,
     title: Option<SharedString>,
     updated_at: DateTime<Utc>,
     created_at: Option<DateTime<Utc>>,
@@ -428,7 +428,7 @@ fn save_thread_metadata_with_main_paths(
     updated_at: DateTime<Utc>,
     cx: &mut TestAppContext,
 ) {
-    let session_id = acp::SessionId::new(Arc::from(session_id));
+    let session_id = protocol::SessionId::new(Arc::from(session_id));
     let title = SharedString::from(title.to_string());
     let thread_id = cx.update(|cx| {
         ThreadMetadataStore::global(cx)
@@ -493,27 +493,27 @@ fn focus_sidebar(sidebar: &Entity<Sidebar>, cx: &mut gpui::VisualTestContext) {
 }
 
 fn request_test_tool_authorization(
-    thread: &Entity<AcpThread>,
+    thread: &Entity<AgentThread>,
     tool_call_id: &str,
     option_id: &str,
     cx: &mut gpui::VisualTestContext,
 ) {
-    let tool_call_id = acp::ToolCallId::new(tool_call_id);
+    let tool_call_id = protocol::ToolCallId::new(tool_call_id);
     let label = format!("Tool {tool_call_id}");
-    let option_id = acp::PermissionOptionId::new(option_id);
+    let option_id = protocol::PermissionOptionId::new(option_id);
     let _authorization_task = cx.update(|_, cx| {
         thread.update(cx, |thread, cx| {
             thread
                 .request_tool_call_authorization(
-                    acp::ToolCall::new(tool_call_id, label)
-                        .kind(acp::ToolKind::Edit)
+                    protocol::ToolCall::new(tool_call_id, label)
+                        .kind(protocol::ToolKind::Edit)
                         .into(),
-                    PermissionOptions::Flat(vec![acp::PermissionOption::new(
+                    PermissionOptions::Flat(vec![protocol::PermissionOption::new(
                         option_id,
                         "Allow",
-                        acp::PermissionOptionKind::AllowOnce,
+                        protocol::PermissionOptionKind::AllowOnce,
                     )]),
-                    acp_thread::AuthorizationKind::PermissionGrant,
+                    agent_thread::AuthorizationKind::PermissionGrant,
                     cx,
                 )
                 .unwrap()
@@ -617,7 +617,7 @@ async fn test_thread_metadata_update_preserves_sticky_header_measurements(cx: &m
     add_test_project("/project-b", &fs, &multi_workspace, cx).await;
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("project-a-thread")),
+        protocol::SessionId::new(Arc::from("project-a-thread")),
         Some("Project A Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, 0).unwrap(),
         None,
@@ -671,7 +671,7 @@ async fn test_thread_metadata_update_preserves_sticky_header_measurements(cx: &m
     });
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("project-a-thread")),
+        protocol::SessionId::new(Arc::from("project-a-thread")),
         Some("Renamed Project A Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 1, 0).unwrap(),
         None,
@@ -870,7 +870,7 @@ async fn test_single_workspace_with_saved_threads(cx: &mut TestAppContext) {
     let sidebar = setup_sidebar(&multi_workspace, cx);
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("thread-1")),
+        protocol::SessionId::new(Arc::from("thread-1")),
         Some("Fix crash in project panel".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 3, 0, 0, 0).unwrap(),
         None,
@@ -880,7 +880,7 @@ async fn test_single_workspace_with_saved_threads(cx: &mut TestAppContext) {
     );
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("thread-2")),
+        protocol::SessionId::new(Arc::from("thread-2")),
         Some("Add inline diff view".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 2, 0, 0, 0).unwrap(),
         None,
@@ -913,7 +913,7 @@ async fn test_workspace_lifecycle(cx: &mut TestAppContext) {
 
     // Single workspace with a thread
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("thread-a1")),
+        protocol::SessionId::new(Arc::from("thread-a1")),
         Some("Thread A1".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, 0).unwrap(),
         None,
@@ -1095,7 +1095,7 @@ async fn test_visible_entries_as_strings(cx: &mut TestAppContext) {
             ListEntry::Thread(Arc::new(ThreadEntry {
                 metadata: ThreadMetadata {
                     thread_id: ThreadId::new(),
-                    session_id: Some(acp::SessionId::new(Arc::from("t-1"))),
+                    session_id: Some(protocol::SessionId::new(Arc::from("t-1"))),
                     agent_id: AgentId::new("zed-agent"),
                     worktree_paths: WorktreePaths::default(),
                     title: Some("Completed thread".into()),
@@ -1122,7 +1122,7 @@ async fn test_visible_entries_as_strings(cx: &mut TestAppContext) {
             ListEntry::Thread(Arc::new(ThreadEntry {
                 metadata: ThreadMetadata {
                     thread_id: ThreadId::new(),
-                    session_id: Some(acp::SessionId::new(Arc::from("t-2"))),
+                    session_id: Some(protocol::SessionId::new(Arc::from("t-2"))),
                     agent_id: AgentId::new("zed-agent"),
                     worktree_paths: WorktreePaths::default(),
                     title: Some("Running thread".into()),
@@ -1149,7 +1149,7 @@ async fn test_visible_entries_as_strings(cx: &mut TestAppContext) {
             ListEntry::Thread(Arc::new(ThreadEntry {
                 metadata: ThreadMetadata {
                     thread_id: ThreadId::new(),
-                    session_id: Some(acp::SessionId::new(Arc::from("t-3"))),
+                    session_id: Some(protocol::SessionId::new(Arc::from("t-3"))),
                     agent_id: AgentId::new("zed-agent"),
                     worktree_paths: WorktreePaths::default(),
                     title: Some("Error thread".into()),
@@ -1177,7 +1177,7 @@ async fn test_visible_entries_as_strings(cx: &mut TestAppContext) {
             ListEntry::Thread(Arc::new(ThreadEntry {
                 metadata: ThreadMetadata {
                     thread_id: ThreadId::new(),
-                    session_id: Some(acp::SessionId::new(Arc::from("t-4"))),
+                    session_id: Some(protocol::SessionId::new(Arc::from("t-4"))),
                     agent_id: AgentId::new("zed-agent"),
                     worktree_paths: WorktreePaths::default(),
                     title: Some("Waiting thread".into()),
@@ -1205,7 +1205,7 @@ async fn test_visible_entries_as_strings(cx: &mut TestAppContext) {
             ListEntry::Thread(Arc::new(ThreadEntry {
                 metadata: ThreadMetadata {
                     thread_id: notified_thread_id,
-                    session_id: Some(acp::SessionId::new(Arc::from("t-5"))),
+                    session_id: Some(protocol::SessionId::new(Arc::from("t-5"))),
                     agent_id: AgentId::new("zed-agent"),
                     worktree_paths: WorktreePaths::default(),
                     title: Some("Notified thread".into()),
@@ -2084,7 +2084,7 @@ async fn test_terminal_close_event_on_archived_linked_worktree_removes_workspace
     let worktree_folder_paths =
         PathList::new(&[PathBuf::from("/worktrees/project/feature-a/project")]);
 
-    let archived_session_id = acp::SessionId::new(Arc::from("archived-wt-thread"));
+    let archived_session_id = protocol::SessionId::new(Arc::from("archived-wt-thread"));
     save_thread_metadata(
         archived_session_id.clone(),
         Some("Archived Worktree Thread".into()),
@@ -2107,7 +2107,7 @@ async fn test_terminal_close_event_on_archived_linked_worktree_removes_workspace
         });
     });
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("main-thread")),
+        protocol::SessionId::new(Arc::from("main-thread")),
         Some("Main Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 2, 0, 0, 0).unwrap(),
         None,
@@ -2258,7 +2258,7 @@ async fn test_terminal_close_event_deletes_empty_draft_when_linked_worktree_has_
     let worktree_panel = add_agent_panel(&worktree_workspace, cx);
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("main-thread")),
+        protocol::SessionId::new(Arc::from("main-thread")),
         Some("Main Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 2, 0, 0, 0).unwrap(),
         None,
@@ -2382,7 +2382,7 @@ async fn test_terminal_close_event_keeps_linked_worktree_workspace_with_live_edi
     let worktree_panel = add_agent_panel(&worktree_workspace, cx);
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("main-thread")),
+        protocol::SessionId::new(Arc::from("main-thread")),
         Some("Main Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 2, 0, 0, 0).unwrap(),
         None,
@@ -2446,7 +2446,7 @@ async fn test_terminal_close_event_keeps_linked_worktree_workspace_with_live_edi
     assert!(
         matches!(
             live_blocks.as_deref(),
-            Some([acp::ContentBlock::Text(text)]) if text.text == "keep this draft"
+            Some([protocol::ContentBlock::Text(text)]) if text.text == "keep this draft"
         ),
         "edited draft should still be readable from the panel after opening the terminal"
     );
@@ -2576,7 +2576,7 @@ async fn test_archive_selected_draft_archives_linked_worktree_after_last_draft(
     add_agent_panel(&worktree_workspace, cx);
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("main-thread")),
+        protocol::SessionId::new(Arc::from("main-thread")),
         Some("Main Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 2, 0, 0, 0).unwrap(),
         None,
@@ -2604,7 +2604,7 @@ async fn test_archive_selected_draft_archives_linked_worktree_after_last_draft(
     cx.update(|_, cx| {
         agent_ui::draft_prompt_store::write(
             first_draft_id,
-            &[acp::ContentBlock::Text(acp::TextContent::new(
+            &[protocol::ContentBlock::Text(protocol::TextContent::new(
                 "first draft",
             ))],
             cx,
@@ -2615,7 +2615,7 @@ async fn test_archive_selected_draft_archives_linked_worktree_after_last_draft(
     cx.update(|_, cx| {
         agent_ui::draft_prompt_store::write(
             second_draft_id,
-            &[acp::ContentBlock::Text(acp::TextContent::new(
+            &[protocol::ContentBlock::Text(protocol::TextContent::new(
                 "second draft",
             ))],
             cx,
@@ -2787,7 +2787,7 @@ async fn test_archive_selected_draft_archives_closed_linked_worktree(cx: &mut Te
     let sidebar = setup_sidebar(&multi_workspace, cx);
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("main-thread")),
+        protocol::SessionId::new(Arc::from("main-thread")),
         Some("Main Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 2, 0, 0, 0).unwrap(),
         None,
@@ -2808,7 +2808,7 @@ async fn test_archive_selected_draft_archives_closed_linked_worktree(cx: &mut Te
     cx.update(|_, cx| {
         agent_ui::draft_prompt_store::write(
             draft_id,
-            &[acp::ContentBlock::Text(acp::TextContent::new(
+            &[protocol::ContentBlock::Text(protocol::TextContent::new(
                 "closed draft",
             ))],
             cx,
@@ -3074,7 +3074,7 @@ async fn test_thread_switcher_includes_terminal_metadata_for_open_project_group(
         panel.close_terminal(terminal_id, window, cx);
     });
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("thread-newer")),
+        protocol::SessionId::new(Arc::from("thread-newer")),
         Some("Newer Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 3, 0, 0, 0).unwrap(),
         None,
@@ -3083,7 +3083,7 @@ async fn test_thread_switcher_includes_terminal_metadata_for_open_project_group(
         cx,
     );
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("thread-older")),
+        protocol::SessionId::new(Arc::from("thread-older")),
         Some("Older Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 2, 0, 0, 0).unwrap(),
         None,
@@ -3219,7 +3219,7 @@ async fn test_thread_switcher_preserves_closed_terminal_linked_worktree_workspac
         });
     });
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("main-thread")),
+        protocol::SessionId::new(Arc::from("main-thread")),
         Some("Main Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 2, 0, 0, 0).unwrap(),
         None,
@@ -3513,7 +3513,7 @@ async fn test_archive_selected_thread_archives_closed_linked_worktree(cx: &mut T
         cx.add_window_view(|window, cx| MultiWorkspace::test_new(main_project.clone(), window, cx));
     let sidebar = setup_sidebar(&multi_workspace, cx);
 
-    let worktree_session_id = acp::SessionId::new(Arc::from("worktree-thread"));
+    let worktree_session_id = protocol::SessionId::new(Arc::from("worktree-thread"));
     let worktree_folder_paths =
         PathList::new(&[PathBuf::from("/worktrees/project/feature-a/project")]);
     save_thread_metadata_with_main_paths(
@@ -3525,7 +3525,7 @@ async fn test_archive_selected_thread_archives_closed_linked_worktree(cx: &mut T
         cx,
     );
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("main-thread")),
+        protocol::SessionId::new(Arc::from("main-thread")),
         Some("Main Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 2, 0, 0, 0).unwrap(),
         None,
@@ -3663,7 +3663,7 @@ async fn test_archive_selected_thread_deletes_empty_draft_when_linked_worktree_h
         cx.add_window_view(|window, cx| MultiWorkspace::test_new(main_project.clone(), window, cx));
     let sidebar = setup_sidebar(&multi_workspace, cx);
 
-    let worktree_session_id = acp::SessionId::new(Arc::from("external-worktree-thread"));
+    let worktree_session_id = protocol::SessionId::new(Arc::from("external-worktree-thread"));
     let worktree_folder_paths = PathList::new(&[PathBuf::from("/external-worktree")]);
     save_thread_metadata_with_main_paths(
         "external-worktree-thread",
@@ -3674,7 +3674,7 @@ async fn test_archive_selected_thread_deletes_empty_draft_when_linked_worktree_h
         cx,
     );
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("main-thread")),
+        protocol::SessionId::new(Arc::from("main-thread")),
         Some("Main Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 2, 0, 0, 0).unwrap(),
         None,
@@ -3865,15 +3865,17 @@ async fn test_parallel_threads_shown_with_live_status(cx: &mut TestAppContext) {
     cx.update(|_, cx| {
         connection.send_update(
             session_id_a.clone(),
-            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new("working...".into())),
+            protocol::SessionUpdate::AgentMessageChunk(protocol::ContentChunk::new(
+                "working...".into(),
+            )),
             cx,
         );
     });
     cx.run_until_parked();
 
     // Open thread B (idle, default response) — thread A goes to background.
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     open_thread_with_connection(&panel, connection, cx);
     send_message(&panel, cx);
@@ -3906,8 +3908,8 @@ async fn test_subagent_permission_request_marks_parent_sidebar_thread_waiting(
     let (sidebar, panel) = setup_sidebar_with_agent_panel(&multi_workspace, cx);
 
     let connection = StubAgentConnection::new().with_supports_load_session(true);
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     open_thread_with_connection(&panel, connection, cx);
     send_message(&panel, cx);
@@ -3915,10 +3917,10 @@ async fn test_subagent_permission_request_marks_parent_sidebar_thread_waiting(
     let parent_session_id = active_session_id(&panel, cx);
     save_test_thread_metadata(&parent_session_id, &project, cx).await;
 
-    let subagent_session_id = acp::SessionId::new("subagent-session");
+    let subagent_session_id = protocol::SessionId::new("subagent-session");
     cx.update(|_, cx| {
         let parent_thread = panel.read(cx).active_agent_thread(cx).unwrap();
-        parent_thread.update(cx, |thread: &mut AcpThread, cx| {
+        parent_thread.update(cx, |thread: &mut AgentThread, cx| {
             thread.subagent_spawned(subagent_session_id.clone(), cx);
         });
     });
@@ -3970,7 +3972,7 @@ async fn test_background_thread_completion_triggers_notification(cx: &mut TestAp
     cx.update(|_, cx| {
         connection_a.send_update(
             session_id_a.clone(),
-            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new("chunk".into())),
+            protocol::SessionUpdate::AgentMessageChunk(protocol::ContentChunk::new("chunk".into())),
             cx,
         );
     });
@@ -3995,7 +3997,7 @@ async fn test_background_thread_completion_triggers_notification(cx: &mut TestAp
     );
 
     // Complete thread A's turn (transition Running → Completed).
-    connection_a.end_turn(session_id_a.clone(), acp::StopReason::EndTurn);
+    connection_a.end_turn(session_id_a.clone(), protocol::StopReason::EndTurn);
     cx.run_until_parked();
 
     // The completed background thread shows a notification indicator.
@@ -4032,7 +4034,7 @@ async fn test_search_narrows_visible_threads_to_matches(cx: &mut TestAppContext)
         ("t-3", "Refactor settings module", 1),
     ] {
         save_thread_metadata(
-            acp::SessionId::new(Arc::from(id)),
+            protocol::SessionId::new(Arc::from(id)),
             Some(title.into()),
             chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, hour, 0, 0).unwrap(),
             None,
@@ -4084,7 +4086,7 @@ async fn test_search_matches_regardless_of_case(cx: &mut TestAppContext) {
     let sidebar = setup_sidebar(&multi_workspace, cx);
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("thread-1")),
+        protocol::SessionId::new(Arc::from("thread-1")),
         Some("Fix Crash In Project Panel".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, 0).unwrap(),
         None,
@@ -4128,7 +4130,7 @@ async fn test_escape_from_search_focuses_first_thread(cx: &mut TestAppContext) {
 
     for (id, title, hour) in [("t-1", "Alpha thread", 2), ("t-2", "Beta thread", 1)] {
         save_thread_metadata(
-            acp::SessionId::new(Arc::from(id)),
+            protocol::SessionId::new(Arc::from(id)),
             Some(title.into()),
             chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, hour, 0, 0).unwrap(),
             None,
@@ -4202,7 +4204,7 @@ async fn test_search_only_shows_workspace_headers_with_matches(cx: &mut TestAppC
         ("a2", "Add tests for editor", 1),
     ] {
         save_thread_metadata(
-            acp::SessionId::new(Arc::from(id)),
+            protocol::SessionId::new(Arc::from(id)),
             Some(title.into()),
             chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, hour, 0, 0).unwrap(),
             None,
@@ -4227,7 +4229,7 @@ async fn test_search_only_shows_workspace_headers_with_matches(cx: &mut TestAppC
         ("b2", "Fix typo in README", 1),
     ] {
         save_thread_metadata(
-            acp::SessionId::new(Arc::from(id)),
+            protocol::SessionId::new(Arc::from(id)),
             Some(title.into()),
             chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, hour, 0, 0).unwrap(),
             None,
@@ -4292,7 +4294,7 @@ async fn test_search_matches_workspace_name(cx: &mut TestAppContext) {
         ("a2", "Add tests for editor", 1),
     ] {
         save_thread_metadata(
-            acp::SessionId::new(Arc::from(id)),
+            protocol::SessionId::new(Arc::from(id)),
             Some(title.into()),
             chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, hour, 0, 0).unwrap(),
             None,
@@ -4317,7 +4319,7 @@ async fn test_search_matches_workspace_name(cx: &mut TestAppContext) {
         ("b2", "Fix typo in README", 1),
     ] {
         save_thread_metadata(
-            acp::SessionId::new(Arc::from(id)),
+            protocol::SessionId::new(Arc::from(id)),
             Some(title.into()),
             chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, hour, 0, 0).unwrap(),
             None,
@@ -4403,7 +4405,7 @@ async fn test_search_finds_threads_inside_collapsed_groups(cx: &mut TestAppConte
     let sidebar = setup_sidebar(&multi_workspace, cx);
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("thread-1")),
+        protocol::SessionId::new(Arc::from("thread-1")),
         Some("Important thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, 0).unwrap(),
         None,
@@ -4455,7 +4457,7 @@ async fn test_search_then_keyboard_navigate_and_confirm(cx: &mut TestAppContext)
         ("t-3", "Add new feature", 1),
     ] {
         save_thread_metadata(
-            acp::SessionId::new(Arc::from(id)),
+            protocol::SessionId::new(Arc::from(id)),
             Some(title.into()),
             chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, hour, 0, 0).unwrap(),
             None,
@@ -4526,7 +4528,7 @@ async fn test_confirm_on_historical_thread_activates_workspace(cx: &mut TestAppC
     });
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("hist-1")),
+        protocol::SessionId::new(Arc::from("hist-1")),
         Some("Historical Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 6, 1, 0, 0, 0).unwrap(),
         None,
@@ -4583,7 +4585,7 @@ async fn test_confirm_on_historical_thread_preserves_historical_timestamp_and_or
         cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
     let (sidebar, _panel) = setup_sidebar_with_agent_panel(&multi_workspace, cx);
 
-    let newer_session_id = acp::SessionId::new(Arc::from("newer-historical-thread"));
+    let newer_session_id = protocol::SessionId::new(Arc::from("newer-historical-thread"));
     let newer_timestamp = chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 6, 2, 0, 0, 0).unwrap();
     save_thread_metadata(
         newer_session_id,
@@ -4595,7 +4597,7 @@ async fn test_confirm_on_historical_thread_preserves_historical_timestamp_and_or
         cx,
     );
 
-    let older_session_id = acp::SessionId::new(Arc::from("older-historical-thread"));
+    let older_session_id = protocol::SessionId::new(Arc::from("older-historical-thread"));
     let older_timestamp = chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 6, 1, 0, 0, 0).unwrap();
     save_thread_metadata(
         older_session_id.clone(),
@@ -4707,7 +4709,7 @@ async fn test_confirm_on_historical_thread_in_new_project_group_opens_real_threa
         });
     });
 
-    let session_id = acp::SessionId::new(Arc::from("historical-new-project-group"));
+    let session_id = protocol::SessionId::new(Arc::from("historical-new-project-group"));
     save_thread_metadata(
         session_id.clone(),
         Some("Historical Thread in New Group".into()),
@@ -4818,7 +4820,7 @@ async fn test_click_clears_selection_and_focus_in_restores_it(cx: &mut TestAppCo
     let sidebar = setup_sidebar(&multi_workspace, cx);
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("t-1")),
+        protocol::SessionId::new(Arc::from("t-1")),
         Some("Thread A".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 2, 0, 0, 0).unwrap(),
         None,
@@ -4828,7 +4830,7 @@ async fn test_click_clears_selection_and_focus_in_restores_it(cx: &mut TestAppCo
     );
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("t-2")),
+        protocol::SessionId::new(Arc::from("t-2")),
         Some("Thread B".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, 0).unwrap(),
         None,
@@ -4888,8 +4890,8 @@ async fn test_thread_title_update_propagates_to_sidebar(cx: &mut TestAppContext)
     let (sidebar, panel) = setup_sidebar_with_agent_panel(&multi_workspace, cx);
 
     let connection = StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Hi there!".into()),
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Hi there!".into()),
     )]);
     open_thread_with_connection(&panel, connection, cx);
     send_message(&panel, cx);
@@ -4908,7 +4910,7 @@ async fn test_thread_title_update_propagates_to_sidebar(cx: &mut TestAppContext)
     );
 
     // Simulate the agent generating a title. The notification chain is:
-    // AcpThread::set_title emits TitleUpdated →
+    // AgentThread::set_title emits TitleUpdated →
     // ConnectionView::handle_thread_event calls cx.notify() →
     // AgentPanel observer fires and emits AgentPanelEvent →
     // Sidebar subscription calls update_entries / rebuild_contents.
@@ -4942,8 +4944,8 @@ async fn test_rename_thread_from_sidebar_updates_title_override(cx: &mut TestApp
     let (sidebar, panel) = setup_sidebar_with_agent_panel(&multi_workspace, cx);
 
     let connection = StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Hi there!".into()),
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Hi there!".into()),
     )]);
     open_thread_with_connection(&panel, connection, cx);
     send_message(&panel, cx);
@@ -5071,8 +5073,8 @@ async fn test_rename_selected_thread_action_renames_selected_thread(cx: &mut Tes
     let (sidebar, panel) = setup_sidebar_with_agent_panel(&multi_workspace, cx);
 
     let connection = StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Hi there!".into()),
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Hi there!".into()),
     )]);
     open_thread_with_connection(&panel, connection, cx);
     send_message(&panel, cx);
@@ -5140,8 +5142,8 @@ async fn test_focused_thread_tracks_user_intent(cx: &mut TestAppContext) {
 
     // Save a thread so it appears in the list.
     let connection_a = StubAgentConnection::new();
-    connection_a.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    connection_a.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     open_thread_with_connection(&panel_a, connection_a, cx);
     send_message(&panel_a, cx);
@@ -5209,8 +5211,8 @@ async fn test_focused_thread_tracks_user_intent(cx: &mut TestAppContext) {
     });
 
     let connection_b = StubAgentConnection::new();
-    connection_b.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Thread B".into()),
+    connection_b.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Thread B".into()),
     )]);
     open_thread_with_connection(&panel_b, connection_b, cx);
     send_message(&panel_b, cx);
@@ -5263,8 +5265,8 @@ async fn test_focused_thread_tracks_user_intent(cx: &mut TestAppContext) {
     });
 
     let connection_b2 = StubAgentConnection::new();
-    connection_b2.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new(DEFAULT_THREAD_TITLE.into()),
+    connection_b2.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new(DEFAULT_THREAD_TITLE.into()),
     )]);
     open_thread_with_connection(&panel_b, connection_b2, cx);
     send_message(&panel_b, cx);
@@ -5353,8 +5355,8 @@ async fn test_new_thread_button_works_after_adding_folder(cx: &mut TestAppContex
 
     // Start a thread and send a message so it has history.
     let connection = StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     open_thread_with_connection(&panel, connection, cx);
     send_message(&panel, cx);
@@ -5528,7 +5530,7 @@ async fn test_thread_switcher_includes_parked_draft(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("thread-existing")),
+        protocol::SessionId::new(Arc::from("thread-existing")),
         Some("Existing Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, 0).unwrap(),
         None,
@@ -5829,8 +5831,8 @@ async fn test_sending_message_from_draft_promotes_in_place(cx: &mut TestAppConte
     cx.run_until_parked();
 
     let connection = StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("ok".into()),
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("ok".into()),
     )]);
     open_thread_with_connection(&panel, connection, cx);
     let draft_id = panel.read_with(cx, |panel, cx| panel.active_thread_id(cx).unwrap());
@@ -5884,8 +5886,8 @@ async fn test_cmd_n_shows_new_thread_entry(cx: &mut TestAppContext) {
 
     // Create a non-empty thread (has messages).
     let connection = StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     open_thread_with_connection(&panel, connection, cx);
     send_message(&panel, cx);
@@ -6007,8 +6009,8 @@ async fn test_cmd_n_shows_new_thread_entry_in_absorbed_worktree(cx: &mut TestApp
 
     // Create a non-empty thread in the worktree workspace.
     let connection = StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     open_thread_with_connection(&worktree_panel, connection, cx);
     send_message(&worktree_panel, cx);
@@ -6132,8 +6134,8 @@ async fn test_only_actively_viewed_empty_draft_is_visible_in_sidebar(cx: &mut Te
     // Give the main panel a real thread we can park the draft behind
     // later. Send a message to promote the draft→real thread.
     let real_connection = StubAgentConnection::new();
-    real_connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("done".into()),
+    real_connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("done".into()),
     )]);
     agent_ui::test_support::open_thread_with_connection(&main_panel, real_connection, cx);
     agent_ui::test_support::send_message(&main_panel, cx);
@@ -6209,7 +6211,7 @@ async fn test_only_actively_viewed_empty_draft_is_visible_in_sidebar(cx: &mut Te
     // placeholder must disappear from the sidebar.
     main_panel.update_in(cx, |panel, window, cx| {
         panel.load_agent_thread(
-            agent_ui::Agent::NativeAgent,
+            agent_ui::Agent::from(agent::ZED_AGENT_ID.clone()),
             main_real_thread_id,
             None,
             None,
@@ -6443,7 +6445,7 @@ async fn test_two_worktree_workspaces_absorbed_when_main_added(cx: &mut TestAppC
     let sidebar = setup_sidebar(&multi_workspace, cx);
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("thread-a")),
+        protocol::SessionId::new(Arc::from("thread-a")),
         Some("Thread A".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, 0).unwrap(),
         None,
@@ -6452,7 +6454,7 @@ async fn test_two_worktree_workspaces_absorbed_when_main_added(cx: &mut TestAppC
         cx,
     );
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("thread-b")),
+        protocol::SessionId::new(Arc::from("thread-b")),
         Some("Thread B".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, 1).unwrap(),
         None,
@@ -6813,7 +6815,9 @@ async fn test_absorbed_worktree_running_thread_shows_live_status(cx: &mut TestAp
     cx.update(|_, cx| {
         connection.send_update(
             session_id.clone(),
-            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new("working...".into())),
+            protocol::SessionUpdate::AgentMessageChunk(protocol::ContentChunk::new(
+                "working...".into(),
+            )),
             cx,
         );
     });
@@ -6900,7 +6904,9 @@ async fn test_absorbed_worktree_completion_triggers_notification(cx: &mut TestAp
     cx.update(|_, cx| {
         connection.send_update(
             session_id.clone(),
-            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new("working...".into())),
+            protocol::SessionUpdate::AgentMessageChunk(protocol::ContentChunk::new(
+                "working...".into(),
+            )),
             cx,
         );
     });
@@ -6911,7 +6917,7 @@ async fn test_absorbed_worktree_completion_triggers_notification(cx: &mut TestAp
         vec!["v [project]", "  Hello {wt-feature-a} * (running)",]
     );
 
-    connection.end_turn(session_id, acp::StopReason::EndTurn);
+    connection.end_turn(session_id, protocol::StopReason::EndTurn);
     cx.run_until_parked();
 
     assert_eq!(
@@ -7401,7 +7407,7 @@ async fn test_sidebar_keeps_multi_root_thread_with_stale_main_paths(cx: &mut Tes
         "expected the workspace's root paths to equal [/cloud, /worktrees/zed/wt_a/zed]"
     );
 
-    let session_id = acp::SessionId::new(Arc::from("multi-root-stale-paths"));
+    let session_id = protocol::SessionId::new(Arc::from("multi-root-stale-paths"));
     let thread_id = ThreadId::new();
 
     // Persist the thread in the "bad" shape that the bug manifests as:
@@ -7476,7 +7482,7 @@ async fn test_activate_archived_thread_with_saved_paths_activates_matching_works
         multi_workspace.read_with(cx, |mw, _| mw.workspaces().next().unwrap().clone());
 
     // Save a thread with path_list pointing to project-b.
-    let session_id = acp::SessionId::new(Arc::from("archived-1"));
+    let session_id = protocol::SessionId::new(Arc::from("archived-1"));
     save_test_thread_metadata(&session_id, &project_b, cx).await;
 
     // Ensure workspace A is active.
@@ -7566,7 +7572,7 @@ async fn test_activate_archived_thread_cwd_fallback_with_matching_workspace(
         sidebar.open_thread_from_archive(
             ThreadMetadata {
                 thread_id: ThreadId::new(),
-                session_id: Some(acp::SessionId::new(Arc::from("unknown-session"))),
+                session_id: Some(protocol::SessionId::new(Arc::from("unknown-session"))),
                 agent_id: agent::ZED_AGENT_ID.clone(),
                 title: Some("CWD Thread".into()),
                 title_override: None,
@@ -7634,7 +7640,7 @@ async fn test_activate_archived_thread_no_paths_no_cwd_uses_active_workspace(
         sidebar.open_thread_from_archive(
             ThreadMetadata {
                 thread_id: ThreadId::new(),
-                session_id: Some(acp::SessionId::new(Arc::from("no-context-session"))),
+                session_id: Some(protocol::SessionId::new(Arc::from("no-context-session"))),
                 agent_id: agent::ZED_AGENT_ID.clone(),
                 title: Some("Contextless Thread".into()),
                 title_override: None,
@@ -7680,7 +7686,7 @@ async fn test_activate_archived_thread_saved_paths_opens_new_workspace(cx: &mut 
     // Save a thread with path_list pointing to project-b – which has no
     // open workspace.
     let path_list_b = PathList::new(&[std::path::PathBuf::from("/project-b")]);
-    let session_id = acp::SessionId::new(Arc::from("archived-new-ws"));
+    let session_id = protocol::SessionId::new(Arc::from("archived-new-ws"));
 
     assert_eq!(
         multi_workspace.read_with(cx, |mw, _| mw.workspaces().count()),
@@ -7743,7 +7749,7 @@ async fn test_activate_archived_thread_reuses_workspace_in_another_window(cx: &m
     let cx_a = &mut gpui::VisualTestContext::from_window(multi_workspace_a.into(), cx);
     let sidebar = setup_sidebar(&multi_workspace_a_entity, cx_a);
 
-    let session_id = acp::SessionId::new(Arc::from("archived-cross-window"));
+    let session_id = protocol::SessionId::new(Arc::from("archived-cross-window"));
 
     sidebar.update_in(cx_a, |sidebar, window, cx| {
         sidebar.open_thread_from_archive(
@@ -7825,7 +7831,7 @@ async fn test_activate_archived_thread_reuses_workspace_in_another_window_with_t
     let workspace_b = multi_workspace_b_entity.read_with(cx_b, |mw, _| mw.workspace().clone());
     let _panel_b = add_agent_panel(&workspace_b, cx_b);
 
-    let session_id = acp::SessionId::new(Arc::from("archived-cross-window-with-sidebar"));
+    let session_id = protocol::SessionId::new(Arc::from("archived-cross-window-with-sidebar"));
     let metadata = ThreadMetadata {
         thread_id: ThreadId::new(),
         session_id: Some(session_id.clone()),
@@ -7908,7 +7914,7 @@ async fn test_activate_archived_thread_prefers_current_window_for_matching_paths
     let cx_a = &mut gpui::VisualTestContext::from_window(multi_workspace_a.into(), cx);
     let sidebar_a = setup_sidebar(&multi_workspace_a_entity, cx_a);
 
-    let session_id = acp::SessionId::new(Arc::from("archived-current-window"));
+    let session_id = protocol::SessionId::new(Arc::from("archived-current-window"));
     let metadata = ThreadMetadata {
         thread_id: ThreadId::new(),
         session_id: Some(session_id.clone()),
@@ -8042,7 +8048,9 @@ async fn test_archive_thread_uses_next_threads_own_workspace(cx: &mut TestAppCon
     cx.update(|_, cx| {
         connection.send_update(
             thread2_session_id.clone(),
-            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new("working...".into())),
+            protocol::SessionUpdate::AgentMessageChunk(protocol::ContentChunk::new(
+                "working...".into(),
+            )),
             cx,
         );
     });
@@ -8060,7 +8068,7 @@ async fn test_archive_thread_uses_next_threads_own_workspace(cx: &mut TestAppCon
 
     // Save thread 1's metadata with the worktree path and an older timestamp so
     // it sorts below thread 2. archive_thread will find it as the "next" candidate.
-    let thread1_session_id = acp::SessionId::new(Arc::from("thread1-worktree-session"));
+    let thread1_session_id = protocol::SessionId::new(Arc::from("thread1-worktree-session"));
     save_thread_metadata(
         thread1_session_id,
         Some("Thread 1".into()),
@@ -8203,7 +8211,7 @@ async fn test_archive_last_worktree_thread_removes_workspace(cx: &mut TestAppCon
 
     // Save a thread for the main project.
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("main-thread")),
+        protocol::SessionId::new(Arc::from("main-thread")),
         Some("Main Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 2, 0, 0, 0).unwrap(),
         None,
@@ -8213,7 +8221,7 @@ async fn test_archive_last_worktree_thread_removes_workspace(cx: &mut TestAppCon
     );
 
     // Save a thread for the linked worktree.
-    let wt_thread_id = acp::SessionId::new(Arc::from("worktree-thread"));
+    let wt_thread_id = protocol::SessionId::new(Arc::from("worktree-thread"));
     save_thread_metadata(
         wt_thread_id.clone(),
         Some("Worktree Thread".into()),
@@ -8678,7 +8686,7 @@ async fn test_restore_worktree_thread_uses_main_repo_project_group_key(cx: &mut 
     });
 
     // Save thread metadata for the linked worktree.
-    let wt_session_id = acp::SessionId::new(Arc::from("wt-thread-c"));
+    let wt_session_id = protocol::SessionId::new(Arc::from("wt-thread-c"));
     save_thread_metadata(
         wt_session_id.clone(),
         Some("Worktree Thread C".into()),
@@ -8827,7 +8835,7 @@ async fn test_archive_last_worktree_thread_not_blocked_by_remote_thread_at_same_
 
     // Save a thread for the main project.
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("main-thread")),
+        protocol::SessionId::new(Arc::from("main-thread")),
         Some("Main Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 2, 0, 0, 0).unwrap(),
         None,
@@ -8837,7 +8845,7 @@ async fn test_archive_last_worktree_thread_not_blocked_by_remote_thread_at_same_
     );
 
     // Save a local thread for the linked worktree.
-    let wt_thread_id = acp::SessionId::new(Arc::from("worktree-thread"));
+    let wt_thread_id = protocol::SessionId::new(Arc::from("worktree-thread"));
     save_thread_metadata(
         wt_thread_id.clone(),
         Some("Local Worktree Thread".into()),
@@ -8856,7 +8864,7 @@ async fn test_archive_last_worktree_thread_not_blocked_by_remote_thread_at_same_
     cx.update(|_window, cx| {
         let metadata = ThreadMetadata {
             thread_id: ThreadId::new(),
-            session_id: Some(acp::SessionId::new(Arc::from("remote-wt-thread"))),
+            session_id: Some(protocol::SessionId::new(Arc::from("remote-wt-thread"))),
             agent_id: agent::ZED_AGENT_ID.clone(),
             title: Some("Remote Worktree Thread".into()),
             title_override: None,
@@ -8996,7 +9004,7 @@ async fn test_linked_worktree_threads_not_duplicated_across_groups(cx: &mut Test
     // Save a thread under the linked worktree path BEFORE setting up
     // the sidebar and panels, so that reconciliation sees the [project]
     // group as non-empty and doesn't create a spurious draft there.
-    let wt_session_id = acp::SessionId::new(Arc::from("wt-thread"));
+    let wt_session_id = protocol::SessionId::new(Arc::from("wt-thread"));
     save_thread_metadata(
         wt_session_id,
         Some("Worktree Thread".into()),
@@ -9029,7 +9037,7 @@ async fn test_linked_worktree_threads_not_duplicated_across_groups(cx: &mut Test
     );
 }
 
-fn thread_id_for(session_id: &acp::SessionId, cx: &mut TestAppContext) -> ThreadId {
+fn thread_id_for(session_id: &protocol::SessionId, cx: &mut TestAppContext) -> ThreadId {
     cx.read(|cx| {
         ThreadMetadataStore::global(cx)
             .read(cx)
@@ -9081,8 +9089,8 @@ async fn test_thread_switcher_ordering(cx: &mut TestAppContext) {
     // Thread C (oldest), Thread B, Thread A (newest) — by created_at.
     // We send messages in each so they also get last_message_sent_or_queued timestamps.
     let connection_c = StubAgentConnection::new();
-    connection_c.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done C".into()),
+    connection_c.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done C".into()),
     )]);
     open_thread_with_connection(&panel, connection_c, cx);
     send_message(&panel, cx);
@@ -9099,8 +9107,8 @@ async fn test_thread_switcher_ordering(cx: &mut TestAppContext) {
     );
 
     let connection_b = StubAgentConnection::new();
-    connection_b.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done B".into()),
+    connection_b.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done B".into()),
     )]);
     open_thread_with_connection(&panel, connection_b, cx);
     send_message(&panel, cx);
@@ -9117,8 +9125,8 @@ async fn test_thread_switcher_ordering(cx: &mut TestAppContext) {
     );
 
     let connection_a = StubAgentConnection::new();
-    connection_a.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done A".into()),
+    connection_a.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done A".into()),
     )]);
     open_thread_with_connection(&panel, connection_a, cx);
     send_message(&panel, cx);
@@ -9291,7 +9299,7 @@ async fn test_thread_switcher_ordering(cx: &mut TestAppContext) {
     // ── 3. Add a historical thread (no last_accessed_at, no message sent) ──
     // This thread was never opened in a panel — it only exists in metadata.
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("thread-historical")),
+        protocol::SessionId::new(Arc::from("thread-historical")),
         Some("Historical Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 6, 1, 0, 0, 0).unwrap(),
         Some(chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 6, 1, 0, 0, 0).unwrap()),
@@ -9313,7 +9321,7 @@ async fn test_thread_switcher_ordering(cx: &mut TestAppContext) {
     // But the live threads (A, B, C) each had send_message called which sets
     // last_message_sent_or_queued. So for the accessed threads (tier 1) the
     // sort key is last_accessed_at; for Historical Thread (tier 3) it's created_at.
-    let session_id_hist = acp::SessionId::new(Arc::from("thread-historical"));
+    let session_id_hist = protocol::SessionId::new(Arc::from("thread-historical"));
     let thread_id_hist = thread_id_for(&session_id_hist, cx);
 
     let ids = switcher_ids(&sidebar, cx);
@@ -9329,7 +9337,7 @@ async fn test_thread_switcher_ordering(cx: &mut TestAppContext) {
 
     // ── 4. Add another historical thread with older created_at ─────────
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("thread-old-historical")),
+        protocol::SessionId::new(Arc::from("thread-old-historical")),
         Some("Old Historical Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2023, 6, 1, 0, 0, 0).unwrap(),
         Some(chrono::TimeZone::with_ymd_and_hms(&Utc, 2023, 6, 1, 0, 0, 0).unwrap()),
@@ -9345,7 +9353,7 @@ async fn test_thread_switcher_ordering(cx: &mut TestAppContext) {
 
     // Both historical threads have no access or message times. They should
     // appear after accessed threads, sorted by created_at (newest first).
-    let session_id_old_hist = acp::SessionId::new(Arc::from("thread-old-historical"));
+    let session_id_old_hist = protocol::SessionId::new(Arc::from("thread-old-historical"));
     let thread_id_old_hist = thread_id_for(&session_id_old_hist, cx);
     let ids = switcher_ids(&sidebar, cx);
     assert_eq!(
@@ -9373,7 +9381,7 @@ async fn test_archive_thread_keeps_metadata_but_hides_from_sidebar(cx: &mut Test
     let sidebar = setup_sidebar(&multi_workspace, cx);
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("thread-to-archive")),
+        protocol::SessionId::new(Arc::from("thread-to-archive")),
         Some("Thread To Archive".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, 0).unwrap(),
         None,
@@ -9394,7 +9402,7 @@ async fn test_archive_thread_keeps_metadata_but_hides_from_sidebar(cx: &mut Test
 
     sidebar.update_in(cx, |sidebar, window, cx| {
         sidebar.archive_thread(
-            &acp::SessionId::new(Arc::from("thread-to-archive")),
+            &protocol::SessionId::new(Arc::from("thread-to-archive")),
             window,
             cx,
         );
@@ -9427,9 +9435,9 @@ async fn test_archive_thread_drops_retained_conversation_view(cx: &mut TestAppCo
     let (sidebar, panel) = setup_sidebar_with_agent_panel(&multi_workspace, cx);
     cx.run_until_parked();
 
-    let connection = acp_thread::StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    let connection = agent_thread::StubAgentConnection::new();
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     open_thread_with_connection(&panel, connection, cx);
     send_message(&panel, cx);
@@ -9502,9 +9510,9 @@ async fn test_archive_thread_active_entry_management(cx: &mut TestAppContext) {
     // --- Scenario 1: archive a thread in the non-active workspace ---
 
     // Create a thread in project-a (non-active — project-b is active).
-    let connection = acp_thread::StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    let connection = agent_thread::StubAgentConnection::new();
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     agent_ui::test_support::open_thread_with_connection(&panel_a, connection, cx);
     agent_ui::test_support::send_message(&panel_a, cx);
@@ -9529,9 +9537,9 @@ async fn test_archive_thread_active_entry_management(cx: &mut TestAppContext) {
 
     // Create a thread in project-b (the active workspace) and verify it
     // becomes the active entry.
-    let connection = acp_thread::StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    let connection = agent_thread::StubAgentConnection::new();
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     agent_ui::test_support::open_thread_with_connection(&panel_b, connection, cx);
     agent_ui::test_support::send_message(&panel_b, cx);
@@ -9575,9 +9583,9 @@ async fn test_unarchive_only_shows_restored_thread(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     // Create a thread and send a message so it's a real thread.
-    let connection = acp_thread::StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Hello".into()),
+    let connection = agent_thread::StubAgentConnection::new();
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Hello".into()),
     )]);
     agent_ui::test_support::open_thread_with_connection(&panel, connection, cx);
     agent_ui::test_support::send_message(&panel, cx);
@@ -9663,7 +9671,7 @@ async fn test_unarchive_first_thread_in_group_does_not_create_spurious_draft(
 
     // Save an archived thread whose folder_paths point to project-b,
     // which has no open workspace.
-    let session_id = acp::SessionId::new(Arc::from("archived-thread"));
+    let session_id = protocol::SessionId::new(Arc::from("archived-thread"));
     let path_list_b = PathList::new(&[std::path::PathBuf::from("/project-b")]);
     let thread_id = ThreadId::new();
     cx.update(|_, cx| {
@@ -9757,7 +9765,7 @@ async fn test_unarchive_into_new_workspace_does_not_create_duplicate_real_thread
     let sidebar = setup_sidebar(&multi_workspace, cx);
     cx.run_until_parked();
 
-    let session_id = acp::SessionId::new(Arc::from("restore-into-new-workspace"));
+    let session_id = protocol::SessionId::new(Arc::from("restore-into-new-workspace"));
     let path_list_b = PathList::new(&[PathBuf::from("/project-b")]);
     let original_thread_id = ThreadId::new();
     cx.update(|_, cx| {
@@ -9900,9 +9908,9 @@ async fn test_unarchive_into_existing_workspace_replaces_draft(cx: &mut TestAppC
     cx.run_until_parked();
 
     // Create a thread and send a message so it's no longer a draft.
-    let connection = acp_thread::StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    let connection = agent_thread::StubAgentConnection::new();
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     agent_ui::test_support::open_thread_with_connection(&panel, connection, cx);
     agent_ui::test_support::send_message(&panel, cx);
@@ -9985,7 +9993,8 @@ async fn test_unarchive_into_inactive_existing_workspace_does_not_leave_active_d
     });
     cx.run_until_parked();
 
-    let session_id = acp::SessionId::new(Arc::from("unarchive-into-inactive-existing-workspace"));
+    let session_id =
+        protocol::SessionId::new(Arc::from("unarchive-into-inactive-existing-workspace"));
     let thread_id = ThreadId::new();
     cx.update(|_, cx| {
         ThreadMetadataStore::global(cx).update(cx, |store, cx| {
@@ -10110,9 +10119,9 @@ async fn test_unarchive_after_removing_parent_project_group_restores_real_thread
     let panel_b = add_agent_panel(&workspace_b, cx);
     cx.run_until_parked();
 
-    let connection = acp_thread::StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    let connection = agent_thread::StubAgentConnection::new();
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     agent_ui::test_support::open_thread_with_connection(&panel_b, connection, cx);
     agent_ui::test_support::send_message(&panel_b, cx);
@@ -10241,9 +10250,9 @@ async fn test_unarchive_does_not_create_duplicate_real_thread_metadata(cx: &mut 
     let (sidebar, panel) = setup_sidebar_with_agent_panel(&multi_workspace, cx);
     cx.run_until_parked();
 
-    let connection = acp_thread::StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    let connection = agent_thread::StubAgentConnection::new();
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     agent_ui::test_support::open_thread_with_connection(&panel, connection, cx);
     agent_ui::test_support::send_message(&panel, cx);
@@ -10355,9 +10364,9 @@ async fn test_switch_to_workspace_with_archived_thread_shows_no_active_entry(
     cx.run_until_parked();
 
     // Create a thread in project-a's panel (currently non-active).
-    let connection = acp_thread::StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    let connection = agent_thread::StubAgentConnection::new();
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     agent_ui::test_support::open_thread_with_connection(&panel_a, connection, cx);
     agent_ui::test_support::send_message(&panel_a, cx);
@@ -10402,7 +10411,7 @@ async fn test_archived_threads_excluded_from_sidebar_entries(cx: &mut TestAppCon
     let sidebar = setup_sidebar(&multi_workspace, cx);
 
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("visible-thread")),
+        protocol::SessionId::new(Arc::from("visible-thread")),
         Some("Visible Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 2, 0, 0, 0).unwrap(),
         None,
@@ -10411,7 +10420,7 @@ async fn test_archived_threads_excluded_from_sidebar_entries(cx: &mut TestAppCon
         cx,
     );
 
-    let archived_thread_session_id = acp::SessionId::new(Arc::from("archived-thread"));
+    let archived_thread_session_id = protocol::SessionId::new(Arc::from("archived-thread"));
     save_thread_metadata(
         archived_thread_session_id.clone(),
         Some("Archived Thread".into()),
@@ -10552,7 +10561,7 @@ async fn test_archive_last_thread_on_linked_worktree_does_not_create_new_thread_
     cx.update(|_, cx| {
         connection.send_update(
             worktree_thread_id.clone(),
-            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new("done".into())),
+            protocol::SessionUpdate::AgentMessageChunk(protocol::ContentChunk::new("done".into())),
             cx,
         );
     });
@@ -10571,7 +10580,7 @@ async fn test_archive_last_thread_on_linked_worktree_does_not_create_new_thread_
     // Also save a thread on the main project so there's a sibling in the
     // group that can be selected after archiving.
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("main-project-thread")),
+        protocol::SessionId::new(Arc::from("main-project-thread")),
         Some("Main Project Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, 0).unwrap(),
         None,
@@ -10721,7 +10730,7 @@ async fn test_archive_last_thread_on_linked_worktree_with_no_siblings_leaves_gro
     cx.update(|_, cx| {
         connection.send_update(
             worktree_thread_id.clone(),
-            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new("done".into())),
+            protocol::SessionUpdate::AgentMessageChunk(protocol::ContentChunk::new("done".into())),
             cx,
         );
     });
@@ -10833,7 +10842,7 @@ async fn test_unarchive_linked_worktree_thread_into_project_group_shows_only_res
     let _main_panel = add_agent_panel(&main_workspace, cx);
     cx.run_until_parked();
 
-    let session_id = acp::SessionId::new(Arc::from("linked-worktree-unarchive"));
+    let session_id = protocol::SessionId::new(Arc::from("linked-worktree-unarchive"));
     let original_thread_id = ThreadId::new();
     let main_paths = PathList::new(&[PathBuf::from("/project")]);
     let folder_paths = PathList::new(&[PathBuf::from("/wt-ochre-drift")]);
@@ -11023,7 +11032,7 @@ async fn test_archive_thread_on_linked_worktree_selects_sibling_thread(cx: &mut 
     cx.update(|_, cx| {
         connection.send_update(
             worktree_thread_id.clone(),
-            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new("done".into())),
+            protocol::SessionUpdate::AgentMessageChunk(protocol::ContentChunk::new("done".into())),
             cx,
         );
     });
@@ -11039,7 +11048,7 @@ async fn test_archive_thread_on_linked_worktree_selects_sibling_thread(cx: &mut 
     );
 
     // Save a sibling thread on the main project.
-    let main_thread_id = acp::SessionId::new(Arc::from("main-project-thread"));
+    let main_thread_id = protocol::SessionId::new(Arc::from("main-project-thread"));
     save_thread_metadata(
         main_thread_id,
         Some("Main Project Thread".into()),
@@ -11390,7 +11399,7 @@ async fn test_legacy_thread_with_canonical_path_opens_main_repo_workspace(cx: &m
     let sidebar = setup_sidebar(&multi_workspace, cx);
 
     // Save a legacy thread: folder_paths = main repo, main_worktree_paths = empty.
-    let legacy_session = acp::SessionId::new(Arc::from("legacy-main-thread"));
+    let legacy_session = protocol::SessionId::new(Arc::from("legacy-main-thread"));
     cx.update(|_, cx| {
         let metadata = ThreadMetadata {
             thread_id: ThreadId::new(),
@@ -11643,8 +11652,8 @@ async fn test_startup_successful_restoration_no_spurious_draft(cx: &mut TestAppC
 
     // Create and send a message to make a real thread.
     let connection = StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     open_thread_with_connection(&panel, connection, cx);
     send_message(&panel, cx);
@@ -11674,8 +11683,8 @@ async fn test_project_header_click_restores_last_viewed(cx: &mut TestAppContext)
 
     // Create two threads in project-a.
     let conn1 = StubAgentConnection::new();
-    conn1.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    conn1.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     open_thread_with_connection(&panel_a, conn1, cx);
     send_message(&panel_a, cx);
@@ -11683,8 +11692,8 @@ async fn test_project_header_click_restores_last_viewed(cx: &mut TestAppContext)
     save_test_thread_metadata(&thread_a1, &project_a, cx).await;
 
     let conn2 = StubAgentConnection::new();
-    conn2.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-        acp::ContentChunk::new("Done".into()),
+    conn2.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+        protocol::ContentChunk::new("Done".into()),
     )]);
     open_thread_with_connection(&panel_a, conn2, cx);
     send_message(&panel_a, cx);
@@ -11855,7 +11864,7 @@ async fn test_non_archive_thread_paths_migrate_on_worktree_add_and_remove(cx: &m
     // panel), so they are purely historical — no open views hold them.
     // Use different timestamps so sort order is deterministic.
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("hist-1")),
+        protocol::SessionId::new(Arc::from("hist-1")),
         Some("Historical 1".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, 0).unwrap(),
         None,
@@ -11864,7 +11873,7 @@ async fn test_non_archive_thread_paths_migrate_on_worktree_add_and_remove(cx: &m
         cx,
     );
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("hist-2")),
+        protocol::SessionId::new(Arc::from("hist-2")),
         Some("Historical 2".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, 1).unwrap(),
         None,
@@ -12032,7 +12041,7 @@ async fn test_worktree_add_only_regroups_threads_for_changed_workspace(cx: &mut 
     let time_main = chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, 1).unwrap();
     let time_wt = chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 1, 0, 0, 2).unwrap();
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("thread-main")),
+        protocol::SessionId::new(Arc::from("thread-main")),
         Some("Main Thread".into()),
         time_main,
         Some(time_main),
@@ -12041,7 +12050,7 @@ async fn test_worktree_add_only_regroups_threads_for_changed_workspace(cx: &mut 
         cx,
     );
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("thread-wt")),
+        protocol::SessionId::new(Arc::from("thread-wt")),
         Some("Worktree Thread".into()),
         time_wt,
         Some(time_wt),
@@ -12250,7 +12259,7 @@ mod property_test {
         thread_counter: u32,
         workspace_counter: u32,
         worktree_counter: u32,
-        saved_thread_ids: Vec<acp::SessionId>,
+        saved_thread_ids: Vec<protocol::SessionId>,
         unopened_worktrees: Vec<UnopenedWorktree>,
     }
 
@@ -12266,10 +12275,10 @@ mod property_test {
             }
         }
 
-        fn next_metadata_only_thread_id(&mut self) -> acp::SessionId {
+        fn next_metadata_only_thread_id(&mut self) -> protocol::SessionId {
             let id = self.thread_counter;
             self.thread_counter += 1;
-            acp::SessionId::new(Arc::from(format!("prop-thread-{id}")))
+            protocol::SessionId::new(Arc::from(format!("prop-thread-{id}")))
         }
 
         fn next_workspace_path(&mut self) -> String {
@@ -12439,9 +12448,9 @@ mod property_test {
                     cx.update(|_, cx| {
                         connection.send_update(
                             session_id.clone(),
-                            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
-                                "Done".into(),
-                            )),
+                            protocol::SessionUpdate::AgentMessageChunk(
+                                protocol::ContentChunk::new("Done".into()),
+                            ),
                             cx,
                         );
                     });
@@ -12732,8 +12741,8 @@ mod property_test {
     }
 
     fn verify_no_duplicate_threads(sidebar: &Sidebar) -> anyhow::Result<()> {
-        let mut seen: HashSet<acp::SessionId> = HashSet::default();
-        let mut duplicates: Vec<(acp::SessionId, String)> = Vec::new();
+        let mut seen: HashSet<protocol::SessionId> = HashSet::default();
+        let mut duplicates: Vec<(protocol::SessionId, String)> = Vec::new();
 
         for entry in &sidebar.contents.entries {
             if let Some(session_id) = entry.session_id() {
@@ -12810,14 +12819,14 @@ mod property_test {
             .collect::<Vec<_>>();
         let thread_store = ThreadMetadataStore::global(cx);
 
-        let sidebar_thread_ids: HashSet<acp::SessionId> = sidebar
+        let sidebar_thread_ids: HashSet<protocol::SessionId> = sidebar
             .contents
             .entries
             .iter()
             .filter_map(|entry| entry.session_id().cloned())
             .collect();
 
-        let mut metadata_thread_ids: HashSet<acp::SessionId> = HashSet::default();
+        let mut metadata_thread_ids: HashSet<protocol::SessionId> = HashSet::default();
 
         // Query using the same approach as the sidebar: iterate project
         // group keys, then do main + legacy queries per group.
@@ -13293,7 +13302,7 @@ async fn test_remote_project_integration_does_not_briefly_render_as_separate_pro
 
     // Save a thread for the main remote workspace (folder_paths match
     // the open workspace, so it will be classified as Open).
-    let main_thread_id = acp::SessionId::new(Arc::from("main-thread"));
+    let main_thread_id = protocol::SessionId::new(Arc::from("main-thread"));
     save_thread_metadata(
         main_thread_id.clone(),
         Some("Main Thread".into()),
@@ -13310,7 +13319,7 @@ async fn test_remote_project_integration_does_not_briefly_render_as_separate_pro
     // main_worktree_paths match the project group key so it appears
     // in the sidebar under the same remote group. This simulates a
     // linked worktree workspace that was closed.
-    let remote_thread_id = acp::SessionId::new(Arc::from("remote-thread"));
+    let remote_thread_id = protocol::SessionId::new(Arc::from("remote-thread"));
     let (main_worktree_paths, remote_connection) = project.read_with(cx, |p, cx| {
         (
             p.project_group_key(cx).path_list().clone(),
@@ -13571,7 +13580,7 @@ async fn test_archive_removes_worktree_even_when_workspace_paths_diverge(cx: &mu
     // paths diverged (e.g. a folder was added after thread creation).
     // This causes workspace_to_remove to be None because
     // workspace_for_paths can't find a workspace with these exact paths.
-    let wt_thread_id = acp::SessionId::new(Arc::from("worktree-thread"));
+    let wt_thread_id = protocol::SessionId::new(Arc::from("worktree-thread"));
     save_thread_metadata_with_main_paths(
         "worktree-thread",
         "Worktree Thread",
@@ -13586,7 +13595,7 @@ async fn test_archive_removes_worktree_even_when_workspace_paths_diverge(cx: &mu
 
     // Also save a main thread so the sidebar has something to show.
     save_thread_metadata(
-        acp::SessionId::new(Arc::from("main-thread")),
+        protocol::SessionId::new(Arc::from("main-thread")),
         Some("Main Thread".into()),
         chrono::TimeZone::with_ymd_and_hms(&Utc, 2024, 1, 2, 0, 0, 0).unwrap(),
         None,
@@ -13833,7 +13842,7 @@ async fn test_archive_mixed_workspace_closes_only_archived_worktree_items(cx: &m
     );
 
     // Archive the feature-b thread.
-    let fb_session_id = acp::SessionId::new(Arc::from("feature-b-thread"));
+    let fb_session_id = protocol::SessionId::new(Arc::from("feature-b-thread"));
     sidebar.update_in(cx, |sidebar, window, cx| {
         sidebar.archive_thread(&fb_session_id, window, cx);
     });
@@ -14009,7 +14018,7 @@ async fn test_discard_mixed_workspace_draft_closes_only_archived_worktree_items(
     cx.update(|_, cx| {
         agent_ui::draft_prompt_store::write(
             draft_id,
-            &[acp::ContentBlock::Text(acp::TextContent::new(
+            &[protocol::ContentBlock::Text(protocol::TextContent::new(
                 "mixed workspace draft",
             ))],
             cx,
@@ -14280,7 +14289,7 @@ async fn test_remote_archive_thread_with_active_connection(
     )
     .await;
 
-    let wt_thread_id = acp::SessionId::new(Arc::from("worktree-thread"));
+    let wt_thread_id = protocol::SessionId::new(Arc::from("worktree-thread"));
     cx.update(|_window, cx| {
         let metadata = ThreadMetadata {
             thread_id: ThreadId::new(),
@@ -14419,7 +14428,7 @@ async fn test_remote_linked_worktree_workspace_to_remove_uses_remote_connection(
     });
     let sidebar = setup_sidebar(&multi_workspace, cx);
 
-    let worktree_session_id = acp::SessionId::new(Arc::from("remote-worktree-thread"));
+    let worktree_session_id = protocol::SessionId::new(Arc::from("remote-worktree-thread"));
     let worktree_folder_paths = PathList::new(&[PathBuf::from("/external-worktree")]);
     let main_folder_paths = PathList::new(&[PathBuf::from("/project")]);
     let worktree_thread_id = ThreadId::new();
@@ -14562,7 +14571,7 @@ async fn test_remote_archive_thread_with_disconnected_remote(
         cx.add_window_view(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
     let sidebar = setup_sidebar(&multi_workspace, cx);
 
-    let thread_id = acp::SessionId::new(Arc::from("remote-thread"));
+    let thread_id = protocol::SessionId::new(Arc::from("remote-thread"));
     save_thread_metadata(
         thread_id.clone(),
         Some("Remote Thread".into()),
@@ -14630,7 +14639,7 @@ async fn test_collab_guest_move_thread_paths_is_noop(cx: &mut TestAppContext) {
     // WorktreePathsChanged subscription for the project.
     let _sidebar = setup_sidebar(&multi_workspace, cx);
 
-    let session_id = acp::SessionId::new(Arc::from("test-thread"));
+    let session_id = protocol::SessionId::new(Arc::from("test-thread"));
     save_named_thread_metadata("test-thread", "My Thread", &project, cx).await;
 
     let thread_id = cx.update(|_window, cx| {

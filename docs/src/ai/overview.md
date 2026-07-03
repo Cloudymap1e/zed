@@ -9,7 +9,7 @@ Zed's AI docs are organized around three areas:
 
 | Area         | Use it to choose                    | Examples                                                             |
 | ------------ | ----------------------------------- | -------------------------------------------------------------------- |
-| Agents       | How agentic work runs in Zed        | Zed Agent, External Agents, Terminal Threads                         |
+| Agents       | How agentic work runs in Zed        | External Agents, Terminal Threads                                    |
 | Model access | How Zed connects to language models | Zed-hosted models, API access, subscriptions, gateways, local models |
 | Features     | Which AI workflow you want to use   | Agentic editing, inline edits, edit prediction, Git assistance       |
 
@@ -19,8 +19,7 @@ Start with [AI Quick Start](./quick-start.md) if you know what you want to do. U
 
 Agent paths decide how agentic work runs in Zed.
 
-- [Zed Agent](./zed-agent.md): Zed's native agent. It can use models configured through [LLM Providers](./llm-providers.md), including Zed-hosted models, provider API keys, supported subscriptions, gateways, and local models. It also uses built-in tools, profiles, skills, instructions, and MCP servers.
-- [External Agents](./external-agents.md): ACP-integrated agents that run through their own process and configuration.
+- [External Agents](./external-agents.md): agents that run through their own process and configuration while Zed hosts the thread UI.
 - [Terminal Threads](./terminal-threads.md): terminal-backed threads for running an agent CLI or TUI directly in Zed.
 
 The [Threads Sidebar](./parallel-agents.md#threads-sidebar) is where you organize agent work. You can run multiple agent threads and Terminal Threads at once, each using a different agent and working against different projects.
@@ -29,7 +28,7 @@ See [Agents](./agents.md) for a comparison.
 
 ## Model Access {#model-access}
 
-Model access controls which models power the Zed Agent and other model-backed Zed AI features. Zed can use hosted models, provider API access, subscription sign-in, gateways, and local models.
+Model access controls which models power Zed AI features such as Inline Assistant, Git commit generation, thread summaries, and similar workflows. Zed can use hosted models, provider API access, subscription sign-in, gateways, and local models.
 
 See [LLM Providers](./llm-providers.md) to choose a model access path.
 

@@ -1,5 +1,5 @@
-use agent_client_protocol::schema::v1 as acp;
 use agent_skills::Skill;
+use agent_thread::protocol;
 use anyhow::Result;
 use gpui::{App, AsyncApp, SharedString, Task};
 use language_model::LanguageModelToolResultContent;
@@ -141,12 +141,12 @@ impl AgentTool for SkillTool {
 
     const NAME: &'static str = "skill";
 
-    fn kind() -> acp::ToolKind {
+    fn kind() -> protocol::ToolKind {
         // The `Read` kind would map to a magnifying-glass icon in the UI,
         // which reads as "search" — misleading for a skill activation.
         // `Other` maps to the hammer icon, the generic "this is a tool"
         // visual, which fits skill activations better.
-        acp::ToolKind::Other
+        protocol::ToolKind::Other
     }
 
     fn initial_title(
@@ -703,9 +703,9 @@ mod tests {
 
         // Approve once and confirm the tool then completes successfully.
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                agent_client_protocol::schema::v1::PermissionOptionId::new("allow"),
-                agent_client_protocol::schema::v1::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                agent_thread::protocol::PermissionOptionId::new("allow"),
+                agent_thread::protocol::PermissionOptionKind::AllowOnce,
             ))
             .unwrap();
 

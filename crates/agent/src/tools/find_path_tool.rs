@@ -1,5 +1,5 @@
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::protocol;
 use anyhow::{Result, anyhow};
 use futures::FutureExt as _;
 use gpui::{App, AppContext, Entity, SharedString, Task};
@@ -103,8 +103,8 @@ impl AgentTool for FindPathTool {
 
     const NAME: &'static str = "find_path";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Search
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Search
     }
 
     fn initial_title(
@@ -143,7 +143,7 @@ impl AgentTool for FindPathTool {
                 ..cmp::min(input.offset + RESULTS_PER_PAGE, matches.len())];
 
             event_stream.update_fields(
-                acp::ToolCallUpdateFields::new()
+                protocol::ToolCallUpdateFields::new()
                     .title(if paginated_matches.is_empty() {
                         "No matches".into()
                     } else if paginated_matches.len() == 1 {
@@ -155,8 +155,8 @@ impl AgentTool for FindPathTool {
                         paginated_matches
                             .iter()
                             .map(|path| {
-                                acp::ToolCallContent::Content(acp::Content::new(
-                                    acp::ContentBlock::ResourceLink(acp::ResourceLink::new(
+                                protocol::ToolCallContent::Content(protocol::Content::new(
+                                    protocol::ContentBlock::ResourceLink(protocol::ResourceLink::new(
                                         path.to_string_lossy(),
                                         format!("file://{}", path.display()),
                                     )),

@@ -37,7 +37,7 @@ use std::path::PathBuf;
 /// The directory subtrees the sandbox always grants write access to for a
 /// project: its worktree roots. This is the single source of truth shared by
 /// the terminal tool (which hands these to the sandbox as
-/// [`acp_thread::SandboxWrap::writable_paths`]) and the status UI (which lists
+/// [`agent_thread::SandboxWrap::writable_paths`]) and the status UI (which lists
 /// them), so the two can't drift if the set ever changes.
 pub fn sandbox_worktree_writable_paths(project: &Project, cx: &App) -> Vec<PathBuf> {
     project

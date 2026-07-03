@@ -1,8 +1,8 @@
 use std::time::Duration;
 
-use acp_thread::AgentSessionListRequest;
 use agent::ThreadStore;
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::AgentSessionListRequest;
+use agent_thread::protocol;
 use chrono::Utc;
 use collections::{HashMap, HashSet};
 use db::kvp::Dismissable;
@@ -32,10 +32,10 @@ use crate::{
     thread_metadata_store::{ThreadId, ThreadMetadata, ThreadMetadataStore, WorktreePaths},
 };
 
-pub struct AcpThreadImportOnboarding;
+pub struct AgentThreadImportOnboarding;
 pub struct CrossChannelImportOnboarding;
 
-impl AcpThreadImportOnboarding {
+impl AgentThreadImportOnboarding {
     pub fn dismissed(cx: &App) -> bool {
         <Self as Dismissable>::dismissed(cx)
     }
@@ -45,8 +45,8 @@ impl AcpThreadImportOnboarding {
     }
 }
 
-impl Dismissable for AcpThreadImportOnboarding {
-    const KEY: &'static str = "dismissed-acp-thread-import";
+impl Dismissable for AgentThreadImportOnboarding {
+    const KEY: &'static str = "dismissed-external-agent-thread-import";
 }
 
 impl CrossChannelImportOnboarding {
@@ -120,7 +120,7 @@ impl AgentImportStatus {
         match self {
             Self::Loading => Some("Fetching Sessions…".into()),
             Self::Ready { .. } => None,
-            Self::Unsupported => Some("Importing threads from this agent is not possible as it doesn't support ACP's session/list capability.".into()),
+            Self::Unsupported => Some("Importing threads from this agent is not possible as it doesn't support the External Agent session/list capability.".into()),
             Self::Error(error) => Some(format!("Failed to fetch sessions: {error}").into()),
         }
     }
@@ -149,7 +149,7 @@ impl ThreadImportModal {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        AcpThreadImportOnboarding::dismiss(cx);
+        AgentThreadImportOnboarding::dismiss(cx);
 
         let agent_entries = agent_server_store
             .read(cx)
@@ -235,7 +235,7 @@ impl ThreadImportModal {
             .map(|agent_id| (agent_id, AgentImportStatus::Loading))
             .collect();
 
-        let existing_sessions: HashSet<acp::SessionId> = ThreadMetadataStore::global(cx)
+        let existing_sessions: HashSet<protocol::SessionId> = ThreadMetadataStore::global(cx)
             .read(cx)
             .entries()
             .filter_map(|metadata| metadata.session_id.clone())
@@ -362,7 +362,7 @@ impl ThreadImportModal {
         self.is_importing = true;
         self.last_error = None;
 
-        let existing_sessions: HashSet<acp::SessionId> = ThreadMetadataStore::global(cx)
+        let existing_sessions: HashSet<protocol::SessionId> = ThreadMetadataStore::global(cx)
             .read(cx)
             .entries()
             .filter_map(|metadata| metadata.session_id.clone())
@@ -688,7 +688,7 @@ struct AgentSessionFetchStats {
 
 fn fetch_sessions_for_agent(
     agent_id: AgentId,
-    existing_sessions: HashSet<acp::SessionId>,
+    existing_sessions: HashSet<protocol::SessionId>,
     stores: Vec<Entity<AgentConnectionStore>>,
     cx: &mut App,
 ) -> Task<AgentSessionFetchResult> {
@@ -794,7 +794,7 @@ fn fetch_sessions_for_agent(
 async fn collect_all_sessions(
     agent_id: AgentId,
     remote_connection: Option<RemoteConnectionOptions>,
-    list: std::rc::Rc<dyn acp_thread::AgentSessionList>,
+    list: std::rc::Rc<dyn agent_thread::AgentSessionList>,
     cx: &mut gpui::AsyncApp,
 ) -> anyhow::Result<SessionByAgent> {
     let mut sessions = Vec::new();
@@ -823,15 +823,15 @@ async fn collect_all_sessions(
 struct SessionByAgent {
     agent_id: AgentId,
     remote_connection: Option<RemoteConnectionOptions>,
-    sessions: Vec<acp_thread::AgentSessionInfo>,
+    sessions: Vec<agent_thread::AgentSessionInfo>,
 }
 
 fn count_importable_threads_by_agent(
     sessions_by_agent: &[SessionByAgent],
-    existing_sessions: &HashSet<acp::SessionId>,
+    existing_sessions: &HashSet<protocol::SessionId>,
 ) -> HashMap<AgentId, usize> {
     let mut counts_by_agent = HashMap::default();
-    let mut seen_sessions_by_agent = HashMap::<AgentId, HashSet<acp::SessionId>>::default();
+    let mut seen_sessions_by_agent = HashMap::<AgentId, HashSet<protocol::SessionId>>::default();
 
     for sessions_for_agent in sessions_by_agent {
         let seen_sessions = seen_sessions_by_agent
@@ -854,7 +854,7 @@ fn count_importable_threads_by_agent(
 
 fn collect_importable_threads(
     sessions_by_agent: Vec<SessionByAgent>,
-    mut existing_sessions: HashSet<acp::SessionId>,
+    mut existing_sessions: HashSet<protocol::SessionId>,
 ) -> Vec<ThreadMetadata> {
     let mut to_insert = Vec::new();
     for SessionByAgent {
@@ -987,7 +987,7 @@ fn show_cross_channel_import_toast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acp_thread::AgentSessionInfo;
+    use agent_thread::AgentSessionInfo;
     use chrono::Utc;
     use gpui::TestAppContext;
     use std::path::Path;
@@ -1001,7 +1001,7 @@ mod tests {
         created_at: Option<chrono::DateTime<Utc>>,
     ) -> AgentSessionInfo {
         AgentSessionInfo {
-            session_id: acp::SessionId::new(session_id),
+            session_id: protocol::SessionId::new(session_id),
             title: title.map(|t| SharedString::from(t.to_string())),
             work_dirs,
             updated_at,
@@ -1012,7 +1012,7 @@ mod tests {
 
     #[test]
     fn test_collect_skips_sessions_already_in_existing_set() {
-        let existing = HashSet::from_iter(vec![acp::SessionId::new("existing-1")]);
+        let existing = HashSet::from_iter(vec![protocol::SessionId::new("existing-1")]);
         let paths = PathList::new(&[Path::new("/project")]);
 
         let sessions_by_agent = vec![SessionByAgent {
@@ -1166,8 +1166,10 @@ mod tests {
     #[test]
     fn test_collect_all_existing_returns_empty() {
         let paths = PathList::new(&[Path::new("/project")]);
-        let existing =
-            HashSet::from_iter(vec![acp::SessionId::new("s1"), acp::SessionId::new("s2")]);
+        let existing = HashSet::from_iter(vec![
+            protocol::SessionId::new("s1"),
+            protocol::SessionId::new("s2"),
+        ]);
 
         let sessions_by_agent = vec![SessionByAgent {
             agent_id: AgentId::new("agent-a"),
@@ -1184,7 +1186,7 @@ mod tests {
 
     #[test]
     fn test_count_importable_threads_by_agent_counts_each_agent_independently() {
-        let existing = HashSet::from_iter(vec![acp::SessionId::new("existing")]);
+        let existing = HashSet::from_iter(vec![protocol::SessionId::new("existing")]);
         let paths = PathList::new(&[Path::new("/project")]);
         let sessions_by_agent = vec![
             SessionByAgent {

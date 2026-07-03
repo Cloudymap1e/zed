@@ -1,12 +1,12 @@
 use std::rc::Rc;
 
-use acp_thread::{AgentModelIcon, AgentModelInfo, AgentModelSelector};
+use agent_thread::{AgentModelIcon, AgentModelInfo, AgentModelSelector};
 use gpui::{Entity, FocusHandle};
 use picker::popover_menu::PickerPopoverMenu;
 use ui::{PopoverMenuHandle, Tooltip, prelude::*};
 
 use crate::ui::ModelSelectorTooltip;
-use crate::{ModelSelector, model_selector::acp_model_selector};
+use crate::{ModelSelector, model_selector::external_agent_model_selector};
 
 pub struct ModelSelectorPopover {
     selector: Entity<ModelSelector>,
@@ -22,8 +22,9 @@ impl ModelSelectorPopover {
         cx: &mut Context<Self>,
     ) -> Self {
         Self {
-            selector: cx
-                .new(move |cx| acp_model_selector(selector, focus_handle.clone(), window, cx)),
+            selector: cx.new(move |cx| {
+                external_agent_model_selector(selector, focus_handle.clone(), window, cx)
+            }),
             menu_handle,
         }
     }

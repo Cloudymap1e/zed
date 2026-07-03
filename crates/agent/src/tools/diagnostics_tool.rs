@@ -1,5 +1,5 @@
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::protocol;
 use futures::{Future, FutureExt as _};
 use gpui::{App, AsyncApp, Entity, Task};
 use language::{DiagnosticSeverity, OffsetRangeExt};
@@ -138,8 +138,8 @@ impl AgentTool for DiagnosticsTool {
 
     const NAME: &'static str = "diagnostics";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Read
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Read
     }
 
     fn initial_title(

@@ -7,7 +7,7 @@ description: Run agent CLIs and TUIs directly in terminal-backed threads in Zed.
 
 Terminal Threads are terminal-backed threads in the [Threads Sidebar](./parallel-agents.md#threads-sidebar). Use them when you want to run an agent CLI or TUI directly in Zed.
 
-Terminal Threads are different from [External Agents](./external-agents.md). External Agents integrate with Zed through ACP and render as agent threads. Terminal Threads run the native command-line tool in a terminal that Zed organizes as a thread.
+Terminal Threads are different from [External Agents](./external-agents.md). External Agents integrate with Zed through the External Agent protocol and render as agent threads. Terminal Threads run the native command-line tool in a terminal that Zed organizes as a thread.
 
 ## What Zed Owns {#what-zed-owns}
 
@@ -28,7 +28,7 @@ The CLI or TUI running inside the terminal owns its own:
 - skills and instruction files
 - MCP configuration
 
-Zed Agent profiles, Zed Agent tool permissions, Zed Skills, and Zed Agent MCP settings do not automatically apply to Terminal Threads.
+Zed-managed profiles, tool permissions, Skills, and MCP settings do not automatically apply to Terminal Threads.
 
 ## Opening a Terminal Thread {#opening-a-terminal-thread}
 
@@ -164,8 +164,8 @@ In remote projects, the CLI may read the remote shell environment and remote con
 Use Terminal Threads when:
 
 - you want the tool's native CLI/TUI experience
-- no ACP integration exists
+- no External Agent integration exists
 - you want subscription behavior owned by the CLI
 - you want the CLI to use its own native config files
 
-For ACP-integrated agents, see [External Agents](./external-agents.md).
+For External Agent agents, see [External Agents](./external-agents.md).

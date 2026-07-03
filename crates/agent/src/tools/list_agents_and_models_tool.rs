@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::protocol;
 use anyhow::Result;
 use gpui::{App, SharedString, Task};
 use language_model::LanguageModelToolResultContent;
@@ -49,8 +49,8 @@ impl AgentTool for ListAgentsAndModelsTool {
 
     const NAME: &'static str = "list_agents_and_models";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Other
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Other
     }
 
     fn initial_title(

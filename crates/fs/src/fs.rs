@@ -501,6 +501,15 @@ impl FileHandle for std::fs::File {
 
 pub struct RealWatcher {}
 
+fn absolute_path_for_trash(path: &Path) -> io::Result<PathBuf> {
+    std::path::absolute(path)
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn test_absolute_path_for_trash(path: &Path) -> io::Result<PathBuf> {
+    absolute_path_for_trash(path)
+}
+
 impl RealFs {
     pub fn new(git_binary_path: Option<PathBuf>, executor: BackgroundExecutor) -> Self {
         Self {
@@ -805,7 +814,7 @@ impl Fs for RealFs {
         // We deliberately use `std::path::absolute` instead of `canonicalize`
         // to avoid resolving symlinks. Otherwise trashing a symlink would trash
         // its target and leave the link behind.
-        let path = std::path::absolute(path).context("Could not make the path absolute")?;
+        let path = absolute_path_for_trash(path).context("Could not make the path absolute")?;
 
         Ok(smol::unblock(move || trash::delete_with_info(path))
             .await

@@ -338,7 +338,7 @@ async fn fetch_registry_index(
     let (status, body) =
         fetch_url_body(http_client, REGISTRY_URL, REGISTRY_FETCH_TIMEOUT, executor)
             .await
-            .context("fetching ACP registry")?;
+            .context("fetching agent registry")?;
 
     if status.is_client_error() {
         let text = String::from_utf8_lossy(body.as_slice());
@@ -348,7 +348,7 @@ async fn fetch_registry_index(
         );
     }
 
-    let index: RegistryIndex = serde_json::from_slice(&body).context("parsing ACP registry")?;
+    let index: RegistryIndex = serde_json::from_slice(&body).context("parsing agent registry")?;
     Ok(RegistryFetchResult {
         index,
         raw_body: body,
@@ -494,7 +494,7 @@ async fn resolve_icon_path(
         if let Err(error) = download_icon(fs.clone(), http_client, &icon_url, entry, executor).await
         {
             log::warn!(
-                "Failed to download ACP registry icon for {}: {error:#}",
+                "Failed to download agent registry icon for {}: {error:#}",
                 entry.id
             );
         }

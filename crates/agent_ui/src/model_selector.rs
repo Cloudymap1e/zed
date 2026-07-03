@@ -1,6 +1,6 @@
 use std::{cmp::Reverse, rc::Rc, sync::Arc};
 
-use acp_thread::{
+use agent_thread::{
     AgentModelIcon, AgentModelId, AgentModelInfo, AgentModelList, AgentModelSelector,
 };
 
@@ -26,7 +26,7 @@ use crate::ui::{
 
 pub type ModelSelector = Picker<ModelPickerDelegate>;
 
-pub fn acp_model_selector(
+pub fn external_agent_model_selector(
     selector: Rc<dyn AgentModelSelector>,
     focus_handle: FocusHandle,
     window: &mut Window,
@@ -502,10 +502,10 @@ mod tests {
         AgentModelList::Grouped(IndexMap::from_iter(grouped_models.into_iter().map(
             |(group, models)| {
                 (
-                    acp_thread::AgentModelGroupName(group.to_string().into()),
+                    agent_thread::AgentModelGroupName(group.to_string().into()),
                     models
                         .into_iter()
-                        .map(|model| acp_thread::AgentModelInfo {
+                        .map(|model| agent_thread::AgentModelInfo {
                             id: AgentModelId::new(model),
                             name: model.to_string().into(),
                             description: None,
@@ -585,7 +585,7 @@ mod tests {
             let model_selector = model_selector.clone();
             move |window, cx| {
                 let selector: Rc<dyn AgentModelSelector> = model_selector;
-                acp_model_selector(selector, cx.focus_handle(), window, cx)
+                external_agent_model_selector(selector, cx.focus_handle(), window, cx)
             }
         });
         cx.run_until_parked();
@@ -807,7 +807,7 @@ mod tests {
     #[gpui::test]
     fn test_flat_model_list_with_favorites(_cx: &mut TestAppContext) {
         let models = AgentModelList::Flat(vec![
-            acp_thread::AgentModelInfo {
+            agent_thread::AgentModelInfo {
                 id: AgentModelId::new("zed/claude"),
                 name: "Claude".into(),
                 description: None,
@@ -816,7 +816,7 @@ mod tests {
                 disabled: None,
                 cost: None,
             },
-            acp_thread::AgentModelInfo {
+            agent_thread::AgentModelInfo {
                 id: AgentModelId::new("zed/gemini"),
                 name: "Gemini".into(),
                 description: None,
@@ -859,7 +859,7 @@ mod tests {
     #[gpui::test]
     fn test_is_favorite_flag_set_correctly_in_entries(_cx: &mut TestAppContext) {
         let models = AgentModelList::Flat(vec![
-            acp_thread::AgentModelInfo {
+            agent_thread::AgentModelInfo {
                 id: AgentModelId::new("favorite-model"),
                 name: "Favorite".into(),
                 description: None,
@@ -868,7 +868,7 @@ mod tests {
                 disabled: None,
                 cost: None,
             },
-            acp_thread::AgentModelInfo {
+            agent_thread::AgentModelInfo {
                 id: AgentModelId::new("regular-model"),
                 name: "Regular".into(),
                 description: None,

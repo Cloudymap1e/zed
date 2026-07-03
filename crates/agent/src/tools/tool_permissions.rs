@@ -2,8 +2,8 @@ use crate::{
     Thread, ToolCallEventStream, ToolPermissionContext, ToolPermissionDecision,
     decide_permission_for_path,
 };
-use agent_client_protocol::schema::v1 as acp;
 use agent_skills::is_agents_skills_path;
+use agent_thread::protocol;
 use anyhow::{Result, anyhow};
 use fs::Fs;
 use gpui::{App, Entity, Task, WeakEntity};
@@ -834,30 +834,30 @@ pub fn authorize_dirty_buffer(
              before the agent continues editing?"
                 .to_string(),
             vec![
-                acp::PermissionOption::new(
-                    acp::PermissionOptionId::new("save"),
+                protocol::PermissionOption::new(
+                    protocol::PermissionOptionId::new("save"),
                     "Save",
-                    acp::PermissionOptionKind::AllowOnce,
+                    protocol::PermissionOptionKind::AllowOnce,
                 ),
-                acp::PermissionOption::new(
-                    acp::PermissionOptionId::new("discard"),
+                protocol::PermissionOption::new(
+                    protocol::PermissionOptionId::new("discard"),
                     "Discard",
-                    acp::PermissionOptionKind::RejectOnce,
+                    protocol::PermissionOptionKind::RejectOnce,
                 ),
             ],
         ),
         DirtyBufferPromptKind::Overwrite => (
             "This file has unsaved changes and the agent wants to overwrite it.".to_string(),
             vec![
-                acp::PermissionOption::new(
-                    acp::PermissionOptionId::new("discard"),
+                protocol::PermissionOption::new(
+                    protocol::PermissionOptionId::new("discard"),
                     "Overwrite",
-                    acp::PermissionOptionKind::AllowOnce,
+                    protocol::PermissionOptionKind::AllowOnce,
                 ),
-                acp::PermissionOption::new(
-                    acp::PermissionOptionId::new("keep"),
+                protocol::PermissionOption::new(
+                    protocol::PermissionOptionId::new("keep"),
                     "Cancel",
-                    acp::PermissionOptionKind::RejectOnce,
+                    protocol::PermissionOptionKind::RejectOnce,
                 ),
             ],
         ),

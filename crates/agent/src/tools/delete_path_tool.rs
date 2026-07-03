@@ -7,8 +7,8 @@ use crate::{
     authorize_with_sensitive_settings, decide_permission_for_path,
 };
 use action_log::ActionLog;
-use agent_client_protocol::schema::v1 as acp;
 use agent_settings::AgentSettings;
+use agent_thread::protocol;
 use futures::{FutureExt as _, SinkExt, StreamExt, channel::mpsc};
 use gpui::{App, AppContext, Entity, SharedString, Task};
 use project::{Project, ProjectPath};
@@ -58,8 +58,8 @@ impl AgentTool for DeletePathTool {
 
     const NAME: &'static str = "delete_path";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Delete
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Delete
     }
 
     fn initial_title(
@@ -331,15 +331,15 @@ mod tests {
         );
         assert!(
             auth.options
-                .first_option_of_kind(acp::PermissionOptionKind::AllowAlways)
+                .first_option_of_kind(protocol::PermissionOptionKind::AllowAlways)
                 .is_none(),
             "agent skills prompt must not offer an \"Always allow\" option: {:?}",
             auth.options,
         );
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("allow"),
-                acp::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("allow"),
+                protocol::PermissionOptionKind::AllowOnce,
             ))
             .expect("authorization response should send");
 
@@ -386,9 +386,9 @@ mod tests {
 
         let auth = event_rx.expect_authorization().await;
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("allow"),
-                acp::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("allow"),
+                protocol::PermissionOptionKind::AllowOnce,
             ))
             .expect("authorization response should send");
 
@@ -488,9 +488,9 @@ mod tests {
         );
 
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("allow"),
-                acp::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("allow"),
+                protocol::PermissionOptionKind::AllowOnce,
             ))
             .unwrap();
 
@@ -618,9 +618,9 @@ mod tests {
         );
 
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("allow"),
-                acp::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("allow"),
+                protocol::PermissionOptionKind::AllowOnce,
             ))
             .unwrap();
 

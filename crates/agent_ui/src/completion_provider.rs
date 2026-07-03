@@ -6,8 +6,8 @@ use std::sync::atomic::AtomicBool;
 
 use crate::DEFAULT_THREAD_TITLE;
 use crate::thread_metadata_store::{ThreadMetadata, ThreadMetadataStore};
-use acp_thread::MentionUri;
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::MentionUri;
+use agent_thread::protocol;
 use anyhow::Result;
 use editor::{CompletionProvider, Editor, code_context_menus::COMPLETION_MENU_MAX_WIDTH};
 use futures::FutureExt as _;
@@ -323,7 +323,7 @@ impl Match {
 
 #[derive(Debug, Clone)]
 pub struct SessionMatch {
-    session_id: acp::SessionId,
+    session_id: protocol::SessionId,
     title: SharedString,
 }
 
@@ -380,15 +380,15 @@ pub struct AvailableCommand {
     pub requires_argument: bool,
     pub source: Option<SharedString>,
     /// Source category used to group the command in the slash popup. `None`
-    /// means the command came from an external ACP agent.
-    pub category: Option<acp_thread::CommandCategory>,
+    /// means the command came from an external External Agent.
+    pub category: Option<agent_thread::CommandCategory>,
 }
 
 impl AvailableCommand {
     fn category_order(&self) -> u8 {
         match self.category {
-            Some(acp_thread::CommandCategory::Native) => 0,
-            Some(acp_thread::CommandCategory::Mcp) => 1,
+            Some(agent_thread::CommandCategory::Native) => 0,
+            Some(agent_thread::CommandCategory::Mcp) => 1,
             None => 2,
         }
     }
@@ -396,9 +396,9 @@ impl AvailableCommand {
     /// Completion group key and header label for this command's category.
     fn group(&self) -> CompletionGroup {
         let (key, label) = match self.category {
-            Some(acp_thread::CommandCategory::Native) => ("commands", "Commands"),
-            Some(acp_thread::CommandCategory::Mcp) => ("mcp-commands", "MCP Server Commands"),
-            None => ("acp-commands", "Commands"),
+            Some(agent_thread::CommandCategory::Native) => ("commands", "Commands"),
+            Some(agent_thread::CommandCategory::Mcp) => ("mcp-commands", "MCP Server Commands"),
+            None => ("external-agent-commands", "Commands"),
         };
         CompletionGroup {
             key: key.into(),
@@ -534,7 +534,7 @@ impl<T: PromptCompletionProviderDelegate> PromptCompletionProvider<T> {
     }
 
     fn completion_for_thread(
-        session_id: acp::SessionId,
+        session_id: protocol::SessionId,
         title: Option<SharedString>,
         source_range: Range<Anchor>,
         recent: bool,
@@ -1565,7 +1565,7 @@ impl<T: PromptCompletionProviderDelegate> CompletionProvider for PromptCompletio
                                 let group = show_section_headers.then(|| command.group());
 
                                 let icon_path = (command.category
-                                    == Some(acp_thread::CommandCategory::Native)
+                                    == Some(agent_thread::CommandCategory::Native)
                                     && command.name.as_ref() == agent::COMPACT_COMMAND_NAME)
                                     .then(|| IconName::Compact.path().into());
 
@@ -2430,7 +2430,7 @@ fn collect_session_matches(cx: &App) -> Vec<SessionMatch> {
     entries
         .into_iter()
         .map(|metadata| {
-            let info = acp_thread::AgentSessionInfo::from(metadata);
+            let info = agent_thread::AgentSessionInfo::from(metadata);
             SessionMatch {
                 session_id: info.session_id,
                 title: session_title(info.title),
@@ -3248,11 +3248,11 @@ mod tests {
     #[gpui::test]
     async fn test_filter_sessions_by_query(cx: &mut TestAppContext) {
         let alpha = SessionMatch {
-            session_id: acp::SessionId::new("session-alpha"),
+            session_id: protocol::SessionId::new("session-alpha"),
             title: "Alpha Session".into(),
         };
         let beta = SessionMatch {
-            session_id: acp::SessionId::new("session-beta"),
+            session_id: protocol::SessionId::new("session-beta"),
             title: "Beta Session".into(),
         };
 

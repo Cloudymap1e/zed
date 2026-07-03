@@ -4,9 +4,9 @@ mod streaming_parser;
 
 use super::tool_permissions::resolve_creatable_global_skill_path;
 use crate::{Thread, ToolCallEventStream};
-use acp_thread::Diff;
 use action_log::ActionLog;
-use agent_client_protocol::schema::v1::{self as acp, ToolCallLocation, ToolCallUpdateFields};
+use agent_thread::Diff;
+use agent_thread::protocol::{self, ToolCallLocation, ToolCallUpdateFields};
 use anyhow::Result;
 use collections::HashSet;
 use futures::{FutureExt, channel::oneshot};
@@ -301,8 +301,8 @@ pub(crate) async fn run_session(
                 .await;
             let (_new_text, diff) = session.compute_new_text_and_diff(cx).await;
             if diff.is_empty() {
-                event_stream.update_fields(acp::ToolCallUpdateFields::new().content(vec![
-                    acp::ToolCallContent::Content(acp::Content::new(error.clone())),
+                event_stream.update_fields(protocol::ToolCallUpdateFields::new().content(vec![
+                    protocol::ToolCallContent::Content(protocol::Content::new(error.clone())),
                 ]));
             }
             Err(EditSessionOutput::Error {
@@ -315,8 +315,8 @@ pub(crate) async fn run_session(
             error,
             session: None,
         } => {
-            event_stream.update_fields(acp::ToolCallUpdateFields::new().content(vec![
-                acp::ToolCallContent::Content(acp::Content::new(error.clone())),
+            event_stream.update_fields(protocol::ToolCallUpdateFields::new().content(vec![
+                protocol::ToolCallContent::Content(protocol::Content::new(error.clone())),
             ]));
             Err(EditSessionOutput::Error {
                 error,
@@ -1055,13 +1055,13 @@ async fn resolve_dirty_buffer(
 
     let Some(decision) = decision else {
         let outcome = match mode {
-            EditSessionMode::Edit => acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("save"),
-                acp::PermissionOptionKind::AllowOnce,
+            EditSessionMode::Edit => agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("save"),
+                protocol::PermissionOptionKind::AllowOnce,
             ),
-            EditSessionMode::Write => acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("keep"),
-                acp::PermissionOptionKind::RejectOnce,
+            EditSessionMode::Write => agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("keep"),
+                protocol::PermissionOptionKind::RejectOnce,
             ),
         };
         event_stream.resolve_authorization(outcome);
@@ -1099,7 +1099,7 @@ async fn resolve_dirty_buffer(
              retrying."
                 .to_string();
             event_stream.update_fields(
-                acp::ToolCallUpdateFields::new().content(vec![error.clone().into()]),
+                protocol::ToolCallUpdateFields::new().content(vec![error.clone().into()]),
             );
             return Err(error);
         }

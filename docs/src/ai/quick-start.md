@@ -7,38 +7,20 @@ description: Choose the right Zed AI setup path for agents, models, subscription
 
 Use this page to choose the right AI setup path in Zed. If you already know the company, subscription, model provider, agent, or CLI you want to use, start with [AI by Company](./by-company.md).
 
-## Use the Zed Agent {#zed-agent}
-
-Use [Zed Agent](./zed-agent.md) when you want Zed's native agent to read, edit, search, and run code in your project.
-
-Zed Agent uses Zed-configured models from [LLM Providers](./llm-providers.md). It also uses Zed's built-in tools, [Agent Profiles](./agent-profiles.md), [Skills](./skills.md), [Instructions](./instructions.md), and [MCP servers](./mcp.md).
-
-Start in the [Agent Panel](./agent-panel.md) to prompt the agent, add context, review changes, and manage threads.
-
-### Configure the Zed Agent {#configure-zed-agent}
-
-| If you want to...                         | Use                                       |
-| ----------------------------------------- | ----------------------------------------- |
-| Control tools and permissions             | [Agent Profiles](./agent-profiles.md)     |
-| Approve or deny individual tools          | [Tool Permissions](./tool-permissions.md) |
-| Add reusable task instructions            | [Skills](./skills.md)                     |
-| Add always-on personal or project context | [Instructions](./instructions.md)         |
-| Connect external tools and context        | [Model Context Protocol](./mcp.md)        |
-
-## Use Another Coding Agent in Zed {#agent-cli}
+## Use a Coding Agent in Zed {#agent-cli}
 
 Use this path for Claude, Codex, OpenCode, Copilot, Cursor, Pi Coding Agent, Gemini CLI, or another coding agent.
 
-| If the agent...                 | Use                                       |
-| ------------------------------- | ----------------------------------------- |
-| Integrates with Zed through ACP | [External Agents](./external-agents.md)   |
-| Runs as a CLI or TUI            | [Terminal Threads](./terminal-threads.md) |
+| If the agent...                                  | Use                                     |
+| ------------------------------------------------ | --------------------------------------- |
+| Integrates with Zed through the External Agent protocol | [External Agents](./external-agents.md) |
+| Runs as a CLI or TUI                             | [Terminal Threads](./terminal-threads.md) |
 
-External Agents and Terminal Threads usually own their own auth, model configuration, subscriptions, tools, instructions, and MCP configuration.
+External Agents and Terminal Threads usually own their own auth, model configuration, subscriptions, tools, instructions, and MCP configuration. Start in the [Agent Panel](./agent-panel.md) to prompt an installed External Agent, add context, review changes, and manage threads.
 
-## Choose Which Models the Zed Agent Uses {#model-access}
+## Choose Which Models Zed AI Features Use {#model-access}
 
-The Zed Agent and other model-backed Zed AI features use models configured through [LLM Providers](./llm-providers.md).
+Zed-configured model access powers model-backed Zed AI features such as Inline Assistant, Git commit generation, thread summaries, and similar workflows. External Agents and Terminal Threads may use separate model configuration owned by the agent.
 
 | If you want to...                                                             | Use                                                               |
 | ----------------------------------------------------------------------------- | ----------------------------------------------------------------- |
@@ -62,19 +44,19 @@ For general settings mechanics, see [Configuring Zed](../configuring-zed.md).
 
 ## Use a Specific AI Feature {#features}
 
-| If you want to...                              | Use                                                  |
-| ---------------------------------------------- | ---------------------------------------------------- |
-| Prompt agents, add context, and review changes | [Agent Panel](./agent-panel.md)                      |
-| Accept AI completions while typing             | [Edit Prediction](./edit-prediction.md)              |
-| Rewrite selected code or terminal text         | [Inline Assistant](./inline-assistant.md)            |
-| Run multiple AI tasks at once                  | [Parallel Agents](./parallel-agents.md)              |
+| If you want to...                              | Use                                     |
+| ---------------------------------------------- | --------------------------------------- |
+| Prompt agents, add context, and review changes | [Agent Panel](./agent-panel.md)         |
+| Accept AI completions while typing             | [Edit Prediction](./edit-prediction.md) |
+| Rewrite selected code or terminal text         | [Inline Assistant](./inline-assistant.md) |
+| Run multiple AI tasks at once                  | [Parallel Agents](./parallel-agents.md) |
 | Generate commit messages                       | [Git commit generation](../git.md#ai-support-in-git) |
 
 ## Learn More {#learn-more}
 
-| If you want to...                    | Use                                                                                                                                            |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Understand privacy and data controls | [AI Privacy](./privacy-and-security.md) and [Feedback and Training Data](./ai-improvement.md)                                                  |
+| If you want to...                    | Use                                                                                           |
+| ------------------------------------ | --------------------------------------------------------------------------------------------- |
+| Understand privacy and data controls | [AI Privacy](./privacy-and-security.md) and [Feedback and Training Data](./ai-improvement.md) |
 | Understand plans, usage, and billing | [Plans & Pricing](../account/plans-and-pricing.md), [Zed-Hosted Models](../account/zed-hosted-models.md), and [Billing](../account/billing.md) |
 
 ## Turn AI Off {#turn-ai-off}

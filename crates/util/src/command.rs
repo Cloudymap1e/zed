@@ -13,6 +13,17 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000_u32;
 
 pub use gpui_util::new_std_command;
 
+#[cfg(target_os = "macos")]
+pub async fn kill_and_reap(child: &mut Child) -> std::io::Result<std::process::ExitStatus> {
+    child.kill_and_reap().await
+}
+
+#[cfg(not(target_os = "macos"))]
+pub async fn kill_and_reap(child: &mut Child) -> std::io::Result<std::process::ExitStatus> {
+    child.kill()?;
+    child.status().await
+}
+
 pub fn new_command(program: impl AsRef<OsStr>) -> Command {
     Command::new(program)
 }

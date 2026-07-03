@@ -1,8 +1,7 @@
 use crate::diagnostics::{DiagnosticsOptions, codeblock_fence_for_path, collect_diagnostics};
-use acp_thread::{MentionUri, selection_name};
 use agent::{ThreadStore, outline};
-use agent_client_protocol::schema::v1 as acp;
-use agent_servers::{AgentServer, AgentServerDelegate};
+use agent_thread::protocol;
+use agent_thread::{MentionUri, selection_name};
 use anyhow::{Context as _, Result, anyhow};
 use collections::{HashMap, HashSet};
 use editor::{
@@ -59,16 +58,14 @@ pub struct MentionImage {
 
 pub struct MentionSet {
     project: WeakEntity<Project>,
-    thread_store: Option<Entity<ThreadStore>>,
     mentions: HashMap<CreaseId, (MentionUri, MentionTask)>,
     crease_entities: HashMap<CreaseId, Entity<LoadingContext>>,
 }
 
 impl MentionSet {
-    pub fn new(project: WeakEntity<Project>, thread_store: Option<Entity<ThreadStore>>) -> Self {
+    pub fn new(project: WeakEntity<Project>, _thread_store: Option<Entity<ThreadStore>>) -> Self {
         Self {
             project,
-            thread_store,
             mentions: HashMap::default(),
             crease_entities: HashMap::default(),
         }
@@ -595,39 +592,12 @@ impl MentionSet {
 
     fn confirm_mention_for_thread(
         &mut self,
-        id: acp::SessionId,
-        cx: &mut Context<Self>,
+        _id: protocol::SessionId,
+        _cx: &mut Context<Self>,
     ) -> Task<Result<Mention>> {
-        let Some(thread_store) = self.thread_store.clone() else {
-            return Task::ready(Err(anyhow!(
-                "Thread mentions are only supported for the native agent"
-            )));
-        };
-        let Some(project) = self.project.upgrade() else {
-            return Task::ready(Err(anyhow!("project not found")));
-        };
-
-        let server = Rc::new(agent::NativeAgentServer::new(
-            project.read(cx).fs().clone(),
-            thread_store,
-        ));
-        let delegate =
-            AgentServerDelegate::new(project.read(cx).agent_server_store().clone(), None, None);
-        let connection = server.connect(delegate, project.clone(), cx);
-        cx.spawn(async move |_, cx| {
-            let agent = connection.await?;
-            let agent = agent.downcast::<agent::NativeAgentConnection>().unwrap();
-            let summary = agent
-                .0
-                .update(cx, |agent, cx| {
-                    agent.thread_summary(id, project.clone(), cx)
-                })
-                .await?;
-            Ok(Mention::Text {
-                content: summary.to_string(),
-                tracked_buffers: Vec::new(),
-            })
-        })
+        Task::ready(Err(anyhow!(
+            "Thread mentions are unavailable because the native Zed Agent has been removed"
+        )))
     }
 
     fn confirm_mention_for_diagnostics(
@@ -772,7 +742,7 @@ mod tests {
         let mention_set = cx.new(|_cx| MentionSet::new(project.downgrade(), thread_store));
 
         let task = mention_set.update(cx, |mention_set, cx| {
-            mention_set.confirm_mention_for_thread(acp::SessionId::new("thread-1"), cx)
+            mention_set.confirm_mention_for_thread(protocol::SessionId::new("thread-1"), cx)
         });
 
         let error = task.await.unwrap_err();

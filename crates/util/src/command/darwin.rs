@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::ffi::{CString, OsStr, OsString};
 use std::io;
 use std::os::fd::AsRawFd;
-use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::FromRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Output};
@@ -248,6 +248,12 @@ impl Child {
         self.inner.try_status()
     }
 
+    pub async fn kill_and_reap(&mut self) -> io::Result<ExitStatus> {
+        self.stdin.take();
+        self.inner.kill()?;
+        self.inner.status().await
+    }
+
     pub fn status(
         &mut self,
     ) -> impl std::future::Future<Output = io::Result<ExitStatus>> + Send + 'static {
@@ -300,24 +306,9 @@ fn spawn_posix_spawn(
     stderr_cfg: Stdio,
     kill_on_drop: bool,
 ) -> io::Result<Child> {
-    // posix_spawnp resolves programs against the parent's cwd/PATH, not the child's.
-    let resolved_program = if program.as_bytes().contains(&b'/') {
-        std::path::absolute(current_dir.join(program)).map_or_else(
-            |_| program.as_bytes().to_vec(),
-            |p| p.into_os_string().into_vec(),
-        )
-    } else {
-        envs.and_then(|e| {
-            e.iter()
-                .find(|(k, _)| k.as_os_str() == OsStr::new("PATH"))
-                .and_then(|(_, v)| which::which_in(program, Some(v.as_os_str()), current_dir).ok())
-        })
-        .map_or_else(
-            || program.as_bytes().to_vec(),
-            |path| path.into_os_string().into_vec(),
-        )
-    };
-    let program_cstr = CString::new(resolved_program).map_err(|_| invalid_input_error())?;
+    let exec_program = resolve_program_for_posix_spawn(program, current_dir, envs)?;
+    let exec_program_cstr =
+        CString::new(exec_program.as_bytes()).map_err(|_| invalid_input_error())?;
     let argv0_cstr = CString::new(program.as_bytes()).map_err(|_| invalid_input_error())?;
 
     let current_dir_cstr =
@@ -478,7 +469,7 @@ fn spawn_posix_spawn(
 
         let spawn_result = libc::posix_spawnp(
             &mut pid,
-            program_cstr.as_ptr(),
+            exec_program_cstr.as_ptr(),
             &file_actions,
             &attr,
             argv_ptrs.as_ptr(),
@@ -502,6 +493,83 @@ fn spawn_posix_spawn(
             stdout: stdout_read.map(Async::new).transpose()?,
             stderr: stderr_read.map(Async::new).transpose()?,
         })
+    }
+}
+
+fn resolve_program_for_posix_spawn(
+    program: &OsStr,
+    current_dir: &Path,
+    envs: Option<&[(OsString, OsString)]>,
+) -> io::Result<OsString> {
+    let program_path = Path::new(program);
+    if program_path.is_absolute() {
+        return Ok(program.to_owned());
+    }
+
+    let current_dir = absolute_current_dir(current_dir);
+    if program.as_bytes().contains(&b'/') {
+        return Ok(current_dir.join(program_path).into_os_string());
+    }
+
+    let Some(path) = path_env_for_spawn(envs) else {
+        return Err(program_not_found_error(program));
+    };
+
+    find_program_in_path(program, &path, &current_dir)
+        .map(PathBuf::into_os_string)
+        .ok_or_else(|| program_not_found_error(program))
+}
+
+fn find_program_in_path(program: &OsStr, path: &OsStr, current_dir: &Path) -> Option<PathBuf> {
+    std::env::split_paths(path).find_map(|path_entry| {
+        let path_entry = if path_entry.as_os_str().is_empty() {
+            current_dir.to_path_buf()
+        } else if path_entry.is_absolute() {
+            path_entry
+        } else {
+            current_dir.join(path_entry)
+        };
+        let candidate = path_entry.join(program);
+        is_executable_file(&candidate).then_some(candidate)
+    })
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
+}
+
+fn program_not_found_error(program: &OsStr) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("program not found in PATH: {}", program.to_string_lossy()),
+    )
+}
+
+fn absolute_current_dir(current_dir: &Path) -> PathBuf {
+    if current_dir.is_absolute() {
+        current_dir.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(current_dir))
+            .unwrap_or_else(|_| current_dir.to_path_buf())
+    }
+}
+
+fn path_env_for_spawn(envs: Option<&[(OsString, OsString)]>) -> Option<OsString> {
+    if let Some(envs) = envs {
+        envs.iter()
+            .find_map(|(key, value)| (key.as_os_str() == OsStr::new("PATH")).then(|| value.clone()))
+    } else {
+        std::env::var_os("PATH")
     }
 }
 
@@ -735,6 +803,84 @@ mod tests {
             assert!(output.status.success());
             let pwd = String::from_utf8_lossy(&output.stdout);
             assert!(pwd.trim() == "/tmp" || pwd.trim() == "/private/tmp");
+        });
+    }
+
+    #[test]
+    fn test_spawn_resolves_bare_program_with_child_path() {
+        smol::block_on(async {
+            let tempdir = tempfile::tempdir().expect("create tempdir");
+            let echo_path = tempdir.path().join("zed-test-echo");
+            std::os::unix::fs::symlink("/bin/echo", &echo_path).expect("create echo symlink");
+
+            let output = Command::new("zed-test-echo")
+                .args(["hello"])
+                .env_clear()
+                .env("PATH", tempdir.path().as_os_str())
+                .output()
+                .await
+                .expect("failed to run command");
+
+            assert!(output.status.success());
+            assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hello");
+        });
+    }
+
+    #[test]
+    fn test_spawn_resolves_relative_child_path_against_current_dir() {
+        smol::block_on(async {
+            let tempdir = tempfile::tempdir().expect("create tempdir");
+            let bin_path = tempdir.path().join("bin");
+            std::fs::create_dir(&bin_path).expect("create bin dir");
+            let echo_path = bin_path.join("zed-test-echo");
+            std::os::unix::fs::symlink("/bin/echo", &echo_path).expect("create echo symlink");
+
+            let output = Command::new("zed-test-echo")
+                .args(["hello"])
+                .current_dir(tempdir.path())
+                .env_clear()
+                .env("PATH", "bin")
+                .output()
+                .await
+                .expect("failed to run command");
+
+            assert!(output.status.success());
+            assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hello");
+        });
+    }
+
+    #[test]
+    fn test_spawn_uses_child_path_for_not_found() {
+        smol::block_on(async {
+            let tempdir = tempfile::tempdir().expect("create tempdir");
+            let err = Command::new("echo")
+                .env_clear()
+                .env("PATH", tempdir.path().as_os_str())
+                .output()
+                .await
+                .expect_err("child PATH should not find system echo");
+
+            assert_eq!(err.kind(), io::ErrorKind::NotFound);
+        });
+    }
+
+    #[test]
+    fn test_spawn_resolves_relative_program_against_current_dir() {
+        smol::block_on(async {
+            let tempdir = tempfile::tempdir().expect("create tempdir");
+            let echo_path = tempdir.path().join("zed-test-echo");
+            std::os::unix::fs::symlink("/bin/echo", &echo_path).expect("create echo symlink");
+
+            let output = Command::new("./zed-test-echo")
+                .args(["hello"])
+                .current_dir(tempdir.path())
+                .env_clear()
+                .output()
+                .await
+                .expect("failed to run command");
+
+            assert!(output.status.success());
+            assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "hello");
         });
     }
 

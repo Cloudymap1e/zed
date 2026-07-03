@@ -3,7 +3,7 @@ use super::tool_permissions::{
     resolve_global_skill_path, resolve_project_path,
 };
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::protocol;
 use anyhow::{Context as _, Result, anyhow};
 use fs::Fs;
 use futures::StreamExt as _;
@@ -184,8 +184,8 @@ impl AgentTool for ListDirectoryTool {
 
     const NAME: &'static str = "list_directory";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Read
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Read
     }
 
     fn initial_title(
@@ -917,9 +917,9 @@ mod tests {
         );
 
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("allow"),
-                acp::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("allow"),
+                protocol::PermissionOptionKind::AllowOnce,
             ))
             .unwrap();
 

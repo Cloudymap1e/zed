@@ -81,6 +81,9 @@ else
     exit 1
 fi
 
+cargo_target_dir="${CARGO_TARGET_DIR:-target}"
+target_output_dir="${cargo_target_dir}/${target_triple}/${target_dir}"
+
 # Generate the licenses first, so they can be baked into the binaries
 script/generate-licenses
 
@@ -148,6 +151,7 @@ function download_and_unpack() {
     local path_to_unpack=$2
     local target_path=$3
 
+    local temp_dir
     temp_dir=$(mktemp -d)
 
     if ! command -v curl &> /dev/null; then
@@ -155,9 +159,20 @@ function download_and_unpack() {
         exit 1
     fi
 
-    curl --silent --fail --location "$url" | tar -xvz -C "$temp_dir" -f - $path_to_unpack
+    curl --silent --fail --location "$url" | tar -xz -C "$temp_dir" -f -
 
-    mv "$temp_dir/$path_to_unpack" "$target_path"
+    local unpacked_path="${temp_dir}/${path_to_unpack}"
+    if [[ ! -e "$unpacked_path" ]]; then
+        unpacked_path=$(find "$temp_dir" -path "*/${path_to_unpack}" -print -quit)
+    fi
+
+    if [[ -z "$unpacked_path" || ! -e "$unpacked_path" ]]; then
+        echo "Downloaded archive did not contain ${path_to_unpack}"
+        find "$temp_dir" -maxdepth 4 -type f | sort | sed -n '1,40p'
+        exit 1
+    fi
+
+    mv "$unpacked_path" "$target_path"
 
     rm -rf "$temp_dir"
 }
@@ -243,7 +258,7 @@ function sign_app_binaries() {
             echo "$app_path"
         fi
     else
-        dmg_target_directory="target/${target_triple}/${target_dir}"
+        dmg_target_directory="${target_output_dir}"
         dmg_source_directory="${dmg_target_directory}/dmg"
         dmg_file_path="${dmg_target_directory}/Zed-${arch_suffix}.dmg"
         xcode_bin_dir_path="$(xcode-select -p)/usr/bin"
@@ -297,15 +312,14 @@ function upload_debug_symbols() {
         echo "local install; skipping sentry upload."
     elif [[ -n "${SENTRY_AUTH_TOKEN:-}" ]]; then
         echo "Uploading zed debug symbols to sentry..."
-        exe_path="target/${target_triple}/release/Zed"
-        if ! dsymutil --flat "target/${target_triple}/${target_dir}/zed" 2> target/dsymutil.log; then
+        if ! dsymutil --flat "${target_output_dir}/zed" 2> "${cargo_target_dir}/dsymutil.log"; then
             echo "dsymutil failed"
-            cat target/dsymutil.log
+            cat "${cargo_target_dir}/dsymutil.log"
             exit 1
         fi
-        if ! dsymutil --flat "target/${target_triple}/${target_dir}/remote_server" 2> target/dsymutil.log; then
+        if ! dsymutil --flat "${target_output_dir}/remote_server" 2> "${cargo_target_dir}/dsymutil.log"; then
             echo "dsymutil failed"
-            cat target/dsymutil.log
+            cat "${cargo_target_dir}/dsymutil.log"
             exit 1
         fi
         # note: this uploads the unstripped binary which is needed because it contains
@@ -314,8 +328,8 @@ function upload_debug_symbols() {
         for attempt in 1 2 3; do
             echo "Sentry upload attempt $attempt..."
             if sentry-cli debug-files upload --include-sources --wait -p zed -o zed-dev \
-                "target/${target_triple}/${target_dir}/zed.dwarf" \
-                "target/${target_triple}/${target_dir}/remote_server.dwarf"; then
+                "${target_output_dir}/zed.dwarf" \
+                "${target_output_dir}/remote_server.dwarf"; then
                 break
             else
                 echo "Sentry upload failed on attempt $attempt"
@@ -332,9 +346,9 @@ function upload_debug_symbols() {
 
 upload_debug_symbols
 
-cp target/${target_triple}/${target_dir}/zed "${app_path}/Contents/MacOS/zed"
-cp target/${target_triple}/${target_dir}/cli "${app_path}/Contents/MacOS/cli"
+cp "${target_output_dir}/zed" "${app_path}/Contents/MacOS/zed"
+cp "${target_output_dir}/cli" "${app_path}/Contents/MacOS/cli"
 sign_app_binaries
 
-sign_binary "target/$target_triple/release/remote_server"
-gzip -f --stdout --best target/$target_triple/release/remote_server > target/zed-remote-server-macos-$arch_suffix.gz
+sign_binary "${target_output_dir}/remote_server"
+gzip -f --stdout --best "${target_output_dir}/remote_server" > "${cargo_target_dir}/zed-remote-server-macos-$arch_suffix.gz"

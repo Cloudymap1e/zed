@@ -1,6 +1,6 @@
-use acp_thread::{AgentConnection, StubAgentConnection};
-use agent_client_protocol::schema::v1 as acp;
 use agent_servers::{AgentServer, AgentServerDelegate};
+use agent_thread::protocol;
+use agent_thread::{AgentConnection, StubAgentConnection};
 use gpui::{
     App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
     Pixels, Render, Task, TestAppContext, VisualTestContext, Window, div, px,
@@ -67,8 +67,8 @@ where
 impl StubAgentServer<StubAgentConnection> {
     pub fn default_response() -> Self {
         let conn = StubAgentConnection::new();
-        conn.set_next_prompt_updates(vec![acp::SessionUpdate::AgentMessageChunk(
-            acp::ContentChunk::new("Default response".into()),
+        conn.set_next_prompt_updates(vec![protocol::SessionUpdate::AgentMessageChunk(
+            protocol::ContentChunk::new("Default response".into()),
         )]);
         Self::new(conn)
     }
@@ -107,7 +107,7 @@ pub fn init_test(cx: &mut TestAppContext) {
         // Use an isolated DB so parallel tests can't see each other's
         // persisted records (e.g. created-worktree records).
         cx.set_global(db::AppDatabase::test_new());
-        cx.set_global(acp_thread::StubSessionCounter(
+        cx.set_global(agent_thread::StubSessionCounter(
             std::sync::atomic::AtomicUsize::new(0),
         ));
         theme_settings::init(theme::LoadThemes::JustBase, cx);
@@ -286,7 +286,10 @@ pub fn type_draft_prompt(panel: &Entity<AgentPanel>, text: &str, cx: &mut Visual
     cx.run_until_parked();
 }
 
-pub fn active_session_id(panel: &Entity<AgentPanel>, cx: &VisualTestContext) -> acp::SessionId {
+pub fn active_session_id(
+    panel: &Entity<AgentPanel>,
+    cx: &VisualTestContext,
+) -> protocol::SessionId {
     panel.read_with(cx, |panel, cx| {
         let thread = panel.active_agent_thread(cx).unwrap();
         thread.read(cx).session_id().clone()

@@ -1,7 +1,7 @@
 use std::fmt::Write;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::protocol;
 use gpui::{App, Entity, SharedString, Task};
 use project::Project;
 use schemars::JsonSchema;
@@ -43,8 +43,8 @@ impl AgentTool for GetCodeActionsTool {
 
     const NAME: &'static str = "get_code_actions";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Search
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Search
     }
 
     fn initial_title(

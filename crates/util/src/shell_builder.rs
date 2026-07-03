@@ -128,9 +128,9 @@ impl ShellBuilder {
         (self.program, self.args)
     }
 
-    // This should not exist, but our task infra is broken beyond repair right now
+    // Task commands may be shell fragments, so only quote the appended args.
     #[doc(hidden)]
-    pub fn build_no_quote(
+    pub fn build_with_unquoted_command(
         mut self,
         task_command: Option<String>,
         task_args: &[String],
@@ -138,7 +138,11 @@ impl ShellBuilder {
         if let Some(task_command) = task_command {
             let mut combined_command = task_args.iter().fold(task_command, |mut command, arg| {
                 command.push(' ');
-                command.push_str(&self.kind.to_shell_variable(arg));
+                let shell_variable = self.kind.to_shell_variable(arg);
+                command.push_str(&match self.kind.try_quote(&shell_variable) {
+                    Some(shell_variable) => shell_variable,
+                    None => Cow::Owned(shell_variable),
+                });
                 command
             });
             if self.redirect_stdin {
@@ -336,5 +340,29 @@ mod test {
 
         assert_eq!(program, "fish");
         assert_eq!(args, vec!["-i", "-c", "echo oo"]);
+    }
+
+    #[test]
+    fn build_with_unquoted_command_quotes_args() {
+        let shell = Shell::Program("sh".to_owned());
+        let shell_builder = ShellBuilder::new(&shell, false);
+
+        let (program, args) = shell_builder.build_with_unquoted_command(
+            Some("echo $PATH".into()),
+            &[
+                "src/$paramId/example.test.ts".to_string(),
+                "path with spaces/file.test.ts".to_string(),
+            ],
+        );
+
+        assert_eq!(program, "sh");
+        assert_eq!(
+            args,
+            vec![
+                "-i",
+                "-c",
+                "echo $PATH 'src/$paramId/example.test.ts' 'path with spaces/file.test.ts'"
+            ]
+        );
     }
 }

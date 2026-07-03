@@ -192,6 +192,12 @@ impl State {
     }
 
     fn sign_in(&self, cx: &mut Context<Self>) -> Task<Result<()>> {
+        if client::zed_account_auth_disabled(cx) {
+            return Task::ready(Err(anyhow!(
+                "Zed account authentication is disabled in Zed Dev"
+            )));
+        }
+
         let client = self.client.clone();
         let mut current_user = self.user_store.read(cx).watch_current_user();
         cx.spawn(async move |state, cx| {
@@ -327,6 +333,12 @@ impl LanguageModelProvider for CloudLanguageModelProvider {
     }
 
     fn authenticate(&self, cx: &mut App) -> Task<Result<(), AuthenticateError>> {
+        if client::zed_account_auth_disabled(cx) {
+            return Task::ready(Err(AuthenticateError::Other(anyhow!(
+                "Zed account authentication is disabled in Zed Dev"
+            ))));
+        }
+
         if self.is_authenticated(cx) {
             return Task::ready(Ok(()));
         }
@@ -433,6 +445,7 @@ struct ZedAiConfiguration {
     eligible_for_trial: bool,
     account_too_young: bool,
     compact: bool,
+    zed_account_auth_disabled: bool,
     sign_in_callback: Arc<dyn Fn(&mut Window, &mut App) + Send + Sync>,
 }
 
@@ -487,6 +500,21 @@ impl RenderOnce for ZedAiConfiguration {
             self.is_zed_model_provider_enabled,
             self.eligible_for_trial,
         );
+
+        if self.zed_account_auth_disabled {
+            return v_flex()
+                .gap_2()
+                .when(!self.compact, |this| {
+                    this.child(Label::new(
+                        "Zed account authentication is disabled in Zed Dev.",
+                    ))
+                })
+                .child(
+                    Button::new("sign_in_disabled", "Sign-in disabled in Zed Dev")
+                        .when(!self.compact, |this| this.full_width())
+                        .disabled(true),
+                );
+        }
 
         let manage_subscription_buttons = if has_paid_plan {
             Button::new("manage_settings", "Manage Subscription")
@@ -590,14 +618,16 @@ impl Render for ConfigurationView {
         let is_zed_model_provider_enabled = user_store
             .current_organization_configuration()
             .map_or(true, |config| config.is_zed_model_provider_enabled);
+        let zed_account_auth_disabled = client::zed_account_auth_disabled(cx);
 
         ZedAiConfiguration {
-            is_connected: !state.is_signed_out(cx),
+            is_connected: !zed_account_auth_disabled && !state.is_signed_out(cx),
             plan: user_store.plan(),
             is_zed_model_provider_enabled,
             eligible_for_trial: user_store.trial_started_at().is_none(),
             account_too_young: user_store.account_too_young(),
             compact: self.compact,
+            zed_account_auth_disabled,
             sign_in_callback: self.sign_in_callback.clone(),
         }
     }
@@ -958,6 +988,7 @@ impl Component for ZedAiConfiguration {
                 eligible_for_trial: config.eligible_for_trial,
                 account_too_young: false,
                 compact: false,
+                zed_account_auth_disabled: false,
                 sign_in_callback: Arc::new(|_, _| {}),
             }
             .into_any_element()

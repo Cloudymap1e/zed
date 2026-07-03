@@ -2,14 +2,14 @@
 //!
 //! Drafts are persisted in the thread metadata store with `session_id: None`,
 //! but their unsent prompt text is kept separately here so we don't have to
-//! plumb draft-prompt storage through the native agent's thread database.
+//! plumb draft-prompt storage through thread metadata.
 //!
 //! The display-label helpers ([`display_label_for_draft`] and friends) live
 //! alongside the storage so the sidebar's preview rendering can't drift from
 //! the format we persist.
 
 use agent::ZED_AGENT_ID;
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::protocol;
 use anyhow::Context as _;
 use db::kvp::KeyValueStore;
 use gpui::{App, AppContext as _, Entity, Task};
@@ -27,7 +27,7 @@ const NAMESPACE: &str = "agent_draft_prompts";
 /// Maximum length (in characters) of a draft label rendered in the sidebar.
 const MAX_LABEL_CHARS: usize = 250;
 
-pub fn read(thread_id: ThreadId, cx: &App) -> Option<Vec<acp::ContentBlock>> {
+pub fn read(thread_id: ThreadId, cx: &App) -> Option<Vec<protocol::ContentBlock>> {
     let kvp = KeyValueStore::global(cx);
     let raw = kvp
         .scoped(NAMESPACE)
@@ -39,7 +39,7 @@ pub fn read(thread_id: ThreadId, cx: &App) -> Option<Vec<acp::ContentBlock>> {
 
 pub fn write(
     thread_id: ThreadId,
-    prompt: &[acp::ContentBlock],
+    prompt: &[protocol::ContentBlock],
     cx: &App,
 ) -> Task<anyhow::Result<()>> {
     let kvp = KeyValueStore::global(cx);
@@ -85,9 +85,9 @@ pub fn draft_has_user_content<'a>(
     }
 }
 
-fn blocks_have_user_content(blocks: &[acp::ContentBlock]) -> bool {
+fn blocks_have_user_content(blocks: &[protocol::ContentBlock]) -> bool {
     blocks.iter().any(|block| match block {
-        acp::ContentBlock::Text(text) => !text.text.trim().is_empty(),
+        protocol::ContentBlock::Text(text) => !text.text.trim().is_empty(),
         _ => true,
     })
 }
@@ -158,8 +158,8 @@ pub fn display_label_for_draft(
     let raw = blocks
         .iter()
         .filter_map(|block| match block {
-            acp::ContentBlock::Text(text) => Some(text.text.as_str()),
-            acp::ContentBlock::ResourceLink(link) => Some(link.uri.as_str()),
+            protocol::ContentBlock::Text(text) => Some(text.text.as_str()),
+            protocol::ContentBlock::ResourceLink(link) => Some(link.uri.as_str()),
             _ => None,
         })
         .join(" ");

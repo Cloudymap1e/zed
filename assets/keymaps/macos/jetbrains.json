@@ -94,7 +94,7 @@
     },
   },
   {
-    "context": "AcpThreadSearchBar > Editor",
+    "context": "AgentThreadSearchBar > Editor",
     "bindings": {
       "shift-enter": "agent::SelectPreviousThreadMatch",
     },

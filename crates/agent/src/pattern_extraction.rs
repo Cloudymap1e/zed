@@ -1,4 +1,4 @@
-use acp_thread::PermissionPattern;
+use agent_thread::PermissionPattern;
 use shell_command_parser::{extract_commands, extract_terminal_command_prefix};
 use std::path::{Path, PathBuf};
 use url::Url;

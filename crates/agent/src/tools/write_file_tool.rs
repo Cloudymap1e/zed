@@ -4,7 +4,7 @@ use super::edit_session::{
 };
 use crate::{AgentTool, Thread, ToolCallEventStream, ToolInput, ToolInputPayload};
 use action_log::ActionLog;
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::protocol;
 use futures::FutureExt as _;
 use gpui::{App, AsyncApp, Entity, Task, WeakEntity};
 use language::LanguageRegistry;
@@ -209,8 +209,8 @@ impl AgentTool for WriteFileTool {
         true
     }
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Edit
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Edit
     }
 
     fn initial_title(
@@ -268,8 +268,8 @@ mod tests {
         AgentTool, ContextServerRegistry, Templates, Thread, ToolCallEventStream, ToolInput,
         ToolInputSender,
     };
-    use acp_thread::Diff;
     use action_log::ActionLog;
+    use agent_thread::Diff;
     use fs::Fs as _;
     use futures::StreamExt as _;
     use gpui::{AppContext as _, Entity, TestAppContext, UpdateGlobal};
@@ -375,15 +375,15 @@ mod tests {
         );
         assert!(
             auth.options
-                .first_option_of_kind(acp::PermissionOptionKind::AllowAlways)
+                .first_option_of_kind(protocol::PermissionOptionKind::AllowAlways)
                 .is_none(),
             "agent skills prompt must not offer an \"Always allow\" option: {:?}",
             auth.options,
         );
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("allow"),
-                acp::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("allow"),
+                protocol::PermissionOptionKind::AllowOnce,
             ))
             .expect("authorization response should send");
 
@@ -1199,11 +1199,12 @@ mod tests {
 
         // Verify the prompt is the overwrite-mode prompt.
         let content = auth.tool_call.fields.content.as_deref().unwrap_or(&[]);
-        let acp::ToolCallContent::Content(text) = content.first().expect("expected message body")
+        let protocol::ToolCallContent::Content(text) =
+            content.first().expect("expected message body")
         else {
             panic!("expected text body, got: {:?}", content.first());
         };
-        let acp::ContentBlock::Text(text) = &text.content else {
+        let protocol::ContentBlock::Text(text) = &text.content else {
             panic!("expected text body, got: {:?}", text.content);
         };
         assert!(
@@ -1214,7 +1215,7 @@ mod tests {
 
         // Verify both option ids are present (option_id is the stable contract).
         let option_ids: Vec<&str> = match &auth.options {
-            acp_thread::PermissionOptions::Flat(opts) => {
+            agent_thread::PermissionOptions::Flat(opts) => {
                 opts.iter().map(|o| o.option_id.0.as_ref()).collect()
             }
             other => panic!("expected flat options, got: {other:?}"),
@@ -1223,9 +1224,9 @@ mod tests {
         assert!(option_ids.contains(&"discard"), "options: {option_ids:?}");
 
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("discard"),
-                acp::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("discard"),
+                protocol::PermissionOptionKind::AllowOnce,
             ))
             .unwrap();
 
@@ -1276,9 +1277,9 @@ mod tests {
         let _update = stream_rx.expect_update_fields().await;
         let auth = stream_rx.expect_authorization().await;
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("keep"),
-                acp::PermissionOptionKind::RejectOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("keep"),
+                protocol::PermissionOptionKind::RejectOnce,
             ))
             .unwrap();
 
@@ -1347,8 +1348,11 @@ mod tests {
 
         // The prompt is dismissed by resolving the pending authorization.
         let (_, outcome) = stream_rx.expect_authorization_resolved().await;
-        assert_eq!(outcome.option_id, acp::PermissionOptionId::new("keep"));
-        assert_eq!(outcome.option_kind, acp::PermissionOptionKind::RejectOnce);
+        assert_eq!(outcome.option_id, protocol::PermissionOptionId::new("keep"));
+        assert_eq!(
+            outcome.option_kind,
+            protocol::PermissionOptionKind::RejectOnce
+        );
         drop(auth);
 
         // The overwrite is cancelled with an error.

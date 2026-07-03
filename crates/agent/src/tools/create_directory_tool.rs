@@ -2,8 +2,8 @@ use super::tool_permissions::{
     authorize_symlink_access, canonicalize_worktree_roots, detect_symlink_escape,
     resolve_creatable_global_skill_path, sensitive_settings_kind,
 };
-use agent_client_protocol::schema::v1 as acp;
 use agent_settings::AgentSettings;
+use agent_thread::protocol;
 use futures::FutureExt as _;
 use gpui::{App, Entity, SharedString, Task};
 use project::Project;
@@ -58,8 +58,8 @@ impl AgentTool for CreateDirectoryTool {
 
     const NAME: &'static str = "create_directory";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Edit
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Edit
     }
 
     fn initial_title(
@@ -245,15 +245,15 @@ mod tests {
         );
         assert!(
             auth.options
-                .first_option_of_kind(acp::PermissionOptionKind::AllowAlways)
+                .first_option_of_kind(protocol::PermissionOptionKind::AllowAlways)
                 .is_none(),
             "agent skills prompt must not offer an \"Always allow\" option: {:?}",
             auth.options,
         );
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("allow"),
-                acp::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("allow"),
+                protocol::PermissionOptionKind::AllowOnce,
             ))
             .expect("authorization response should send");
 
@@ -356,9 +356,9 @@ mod tests {
         );
 
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("allow"),
-                acp::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("allow"),
+                protocol::PermissionOptionKind::AllowOnce,
             ))
             .unwrap();
 
@@ -477,9 +477,9 @@ mod tests {
         );
 
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("allow"),
-                acp::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("allow"),
+                protocol::PermissionOptionKind::AllowOnce,
             ))
             .unwrap();
 

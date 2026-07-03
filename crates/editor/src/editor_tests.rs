@@ -8199,6 +8199,42 @@ async fn test_rewrap(cx: &mut TestAppContext) {
         &mut cx,
     );
 
+    let language_registry = Arc::new(language::LanguageRegistry::test(cx.executor()));
+    language_registry.add(markdown_language.clone());
+    language_registry.add(languages::language(
+        "yaml",
+        tree_sitter_yaml::LANGUAGE.into(),
+    ));
+    cx.update_buffer(|buffer, cx| {
+        buffer.set_language_registry(language_registry);
+        buffer.set_language(Some(markdown_language.clone()), cx);
+    });
+    cx.set_state(indoc! {"
+        ˇ---
+        title: Zed
+        date: 2026-05-04
+        ---
+
+        This is a long line of markdown text that should wrap without changing the frontmatter.
+    "});
+    cx.update_editor(|editor, _window, cx| {
+        editor.select_all(&SelectAll, _window, cx);
+        editor.rewrap(RewrapOptions::default(), cx);
+    });
+    assert_eq!(
+        cx.display_text(),
+        indoc! {"
+            ---
+            title: Zed
+            date: 2026-05-04
+            ---
+
+            This is a long line of markdown text
+            that should wrap without changing the
+            frontmatter.
+        "}
+    );
+
     // Test that rewrapping boundary works and preserves relative indent for Markdown documents
     assert_rewrap(
         indoc! {"

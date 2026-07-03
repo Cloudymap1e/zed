@@ -1,5 +1,5 @@
 ---
-title: AI Coding Agent - Zed Agent Panel
+title: AI Coding Agent - Agent Panel
 description: Use Zed's AI coding agent to generate, refactor, and debug code with tool calling, checkpoints, and multi-model support.
 ---
 
@@ -12,10 +12,10 @@ Open it with {#action agent::NewThread} from [the Command Palette](../command-pa
 
 ## Getting Started {#getting-started}
 
-If you're using the Agent Panel for the first time, configure either a model for the [Zed Agent](./zed-agent.md) or an [External Agent](./external-agents.md).
+If you're using the Agent Panel for the first time, install or configure an [External Agent](./external-agents.md).
 
-- Use [LLM Providers](./llm-providers.md) for Zed-hosted models, API access, subscriptions, gateways, and local models.
-- Use [External Agents](./external-agents.md) for ACP-integrated agents.
+- Use [LLM Providers](./llm-providers.md) for Zed-hosted models, API access, subscriptions, gateways, and local models used by Zed AI features.
+- Use [External Agents](./external-agents.md) for agent threads.
 - Use [AI Quick Start](./quick-start.md) if you are not sure which path to choose.
 
 ## Overview {#overview}
@@ -31,14 +31,13 @@ The sections below cover what you can do from here.
 
 ### Creating New Threads {#new-thread}
 
-By default, the Agent Panel uses Zed's first-party agent.
+By default, the Agent Panel starts threads with the selected External Agent.
 
 Start a new thread with {#kb agent::NewThread}, or open the "New Thread…" menu using the agent selector button on the left (in the empty state) or the `+` icon in the top-right of the panel toolbar. You can also open that menu with {#kb agent::ToggleNewThreadMenu}.
 
 From the "New Thread…" menu you can:
 
-- Pick **Zed Agent** or any installed [External Agent](./external-agents.md) to start a new thread with that agent.
-- Choose **New From Summary** to start a fresh Zed Agent thread seeded with a summary of the current conversation — useful for compacting long threads as you approach the context window limit.
+- Pick any installed [External Agent](./external-agents.md) to start a new thread with that agent.
 - Choose **Terminal** to open a terminal thread directly in the Agent Panel — see [Terminal Threads](#terminal-threads) for details.
 
 {#action agent::NewExternalAgentThread} creates a new thread with the specified External Agent id.
@@ -64,7 +63,7 @@ You can click on the card that contains your message and re-submit it with an ad
 
 Messages sent while the agent is in the generating state get, by default, queued.
 
-By default, queued messages get sent once the agent finishes generating. If you want a queued message to reach the Zed Agent sooner—interrupting it at its next step (usually between a tool call and a response) rather than waiting for it to finish—toggle "Steer" on that message. Steering is only available for the Zed Agent, since Zed can't detect turn boundaries for external agents.
+By default, queued messages get sent once the agent finishes generating. External Agent integrations may not expose turn boundaries to Zed, so steering support depends on the selected agent.
 
 You can edit or remove (an individual or all) queued messages.
 You can also still interrupt the agent immediately if you want by either clicking on the stop button or by clicking the "Send Now" (double-enter) on a queued message.
@@ -152,7 +151,7 @@ Copying an image and pasting it is also supported.
 
 Zed surfaces how many tokens you are consuming for your currently active thread near the profile selector in the panel's message editor.
 
-Zed automatically compacts long Zed Agent threads as they approach the configured token threshold. Compaction summarizes earlier messages and replaces them in the model context with that summary, leaving more room for the next turn. The thread shows a **Context Compacted** entry that you can expand to inspect the summary. You can compact manually by typing `/compact` in the message editor.
+Some agent integrations support compaction as they approach their context limit. When available, compaction summarizes earlier messages and leaves more room for the next turn. You can also use agent-provided commands such as `/compact` when the selected agent supports them.
 
 If the selected model's context window is too small for automatic compaction (less than 80000 tokens), a banner appears above the message editor as you approach the token limit. Use **Start New Thread** from that banner, or choose **New From Summary** from the New Thread menu (the `+` button on the top right), to continue in a new thread seeded with a summary. You can also @-mention a past thread in a new one.
 
@@ -175,7 +174,7 @@ Cycle through your favorites with {#kb agent::CycleFavoriteModels} without openi
 
 The Agent Panel supports tool calling, which enables agentic editing. Zed includes [built-in tools](./tools.md) for searching your codebase, editing files, running terminal commands, and more.
 
-Use [Agent Profiles](./agent-profiles.md) to choose which built-in tools and MCP tools are available in a Zed Agent thread. Use [Tool Permissions](./tool-permissions.md) to control whether permission-gated tool calls are allowed, denied, or confirmed.
+Use [External Agents](./external-agents.md) to configure agent-specific tools. Use [Tool Permissions](./tool-permissions.md) for Zed-managed permission-gated tool calls where applicable.
 
 You can add external tools with [MCP Servers](./mcp.md).
 

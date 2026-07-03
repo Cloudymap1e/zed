@@ -372,7 +372,8 @@ impl Render for TitleBar {
                 .when(
                     user.is_none()
                         && is_signed_out_or_auth_error
-                        && TitleBarSettings::get_global(cx).show_sign_in,
+                        && TitleBarSettings::get_global(cx).show_sign_in
+                        && !client::zed_account_auth_disabled(cx),
                     |this| this.child(self.render_sign_in_button(cx)),
                 )
                 .when(is_signing_in, |this| {

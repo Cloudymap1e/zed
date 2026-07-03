@@ -70,6 +70,14 @@ pub static IMPERSONATE_LOGIN: LazyLock<Option<String>> = LazyLock::new(|| {
         .and_then(|s| if s.is_empty() { None } else { Some(s) })
 });
 
+pub fn zed_account_auth_disabled(cx: &App) -> bool {
+    ReleaseChannel::try_global(cx) == Some(ReleaseChannel::Dev)
+}
+
+fn zed_auth_disabled_for_dev_async(cx: &AsyncApp) -> bool {
+    cx.update(|cx| zed_account_auth_disabled(cx))
+}
+
 pub static USE_WEB_LOGIN: LazyLock<bool> = LazyLock::new(|| std::env::var("ZED_WEB_LOGIN").is_ok());
 
 pub static ADMIN_API_TOKEN: LazyLock<Option<String>> = LazyLock::new(|| {
@@ -169,6 +177,15 @@ pub fn init(client: &Arc<Client>, cx: &mut App) {
         let client = client.clone();
         move |_: &SignIn, cx| {
             if let Some(client) = client.upgrade() {
+                if zed_account_auth_disabled(cx) {
+                    cx.spawn(async move |cx| {
+                        client.sign_out(cx).await;
+                        Ok::<(), anyhow::Error>(())
+                    })
+                    .detach_and_log_err(cx);
+                    return;
+                }
+
                 cx.spawn(async move |cx| client.sign_in_with_optional_connect(true, cx).await)
                     .detach_and_log_err(cx);
             }
@@ -871,6 +888,14 @@ impl Client {
     }
 
     pub async fn has_credentials(&self, cx: &AsyncApp) -> bool {
+        if zed_auth_disabled_for_dev_async(cx) {
+            self.credentials_provider
+                .delete_credentials(cx)
+                .await
+                .log_err();
+            return false;
+        }
+
         self.credentials_provider
             .read_credentials(cx)
             .await
@@ -882,6 +907,17 @@ impl Client {
         try_provider: bool,
         cx: &AsyncApp,
     ) -> Result<Credentials> {
+        if zed_auth_disabled_for_dev_async(cx) {
+            self.state.write().credentials = None;
+            self.cloud_client.clear_credentials();
+            self.credentials_provider
+                .delete_credentials(cx)
+                .await
+                .log_err();
+            self.disconnect(cx);
+            return Err(anyhow!("Zed account authentication is disabled in Zed Dev"));
+        }
+
         let is_reauthenticating = if self.status().borrow().is_signed_out() {
             self.set_status(Status::Authenticating, cx);
             false
@@ -1044,6 +1080,11 @@ impl Client {
         try_provider: bool,
         cx: &AsyncApp,
     ) -> Result<()> {
+        if zed_auth_disabled_for_dev_async(cx) {
+            self.sign_out(cx).await;
+            return Err(anyhow!("Zed account authentication is disabled in Zed Dev"));
+        }
+
         // Don't try to sign in again if we're already connected to Collab, as it will temporarily disconnect us.
         if self.status().borrow().is_connected() {
             return Ok(());
@@ -2279,6 +2320,52 @@ mod tests {
             format!("{error:#}"),
             "failed to validate credentials: boom: connection reset by peer"
         );
+    }
+
+    #[gpui::test]
+    async fn test_zed_account_auth_is_disabled_in_dev(cx: &mut TestAppContext) {
+        init_test(cx);
+        cx.update(|cx| {
+            release_channel::init_test(
+                AppVersion::load("1.0.0", None, None),
+                ReleaseChannel::Dev,
+                cx,
+            );
+        });
+
+        let authenticate_count = Arc::new(Mutex::new(0));
+        let client = cx.update(|cx| {
+            Client::new(
+                Arc::new(FakeSystemClock::new()),
+                FakeHttpClient::with_404_response(),
+                cx,
+            )
+        });
+        client.override_authenticate({
+            let authenticate_count = authenticate_count.clone();
+            move |cx| {
+                let authenticate_count = authenticate_count.clone();
+                cx.background_spawn(async move {
+                    *authenticate_count.lock() += 1;
+                    Ok(Credentials {
+                        user_id: 1,
+                        access_token: "token".into(),
+                    })
+                })
+            }
+        });
+
+        let error = client
+            .sign_in_with_optional_connect(true, &cx.to_async())
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            format!("{error:#}"),
+            "Zed account authentication is disabled in Zed Dev"
+        );
+        assert_eq!(*authenticate_count.lock(), 0);
+        assert!(!client.has_credentials(&cx.to_async()).await);
     }
 
     #[gpui::test(iterations = 10)]

@@ -20,8 +20,8 @@ Zed also handles the `notifications/tools/list_changed` notification from MCP se
 
 | Agent path                                | MCP behavior                                                                            |
 | ----------------------------------------- | --------------------------------------------------------------------------------------- |
-| [Zed Agent](./zed-agent.md)               | Uses Zed-configured MCP servers directly                                                |
-| [External Agents](./external-agents.md)   | Zed can forward configured MCP servers over ACP; agents may also read native MCP config |
+| Zed-managed tool surfaces                    | Use Zed-configured MCP servers directly where supported                                  |
+| [External Agents](./external-agents.md)   | Zed can forward configured MCP servers through the External Agent protocol; agents may also read native MCP config |
 | [Terminal Threads](./terminal-threads.md) | Native CLIs/TUIs read their own MCP configuration                                       |
 
 ## Installing MCP Servers
@@ -160,7 +160,7 @@ Learn more about [how tool permissions work](./tool-permissions.md), how to furt
 
 ### External Agents
 
-MCP servers configured in Zed are forwarded to [External Agents](./external-agents.md) via the [Agent Client Protocol](https://agentclientprotocol.com/). External Agents can also access MCP servers from their own native configuration files.
+MCP servers configured in Zed are forwarded to [External Agents](./external-agents.md) via the External Agent protocol. External Agents can also access MCP servers from their own native configuration files.
 
 For details on what configuration is shared between Zed and External Agents, see [Configuration Boundaries](./external-agents.md#configuration-boundaries).
 

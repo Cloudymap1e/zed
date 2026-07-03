@@ -698,7 +698,6 @@ fn main() {
             cx,
         );
         language_models::init(app_state.user_store.clone(), app_state.client.clone(), cx);
-        acp_tools::init(cx);
         zed::telemetry_log::init(cx);
         zed::remote_debug::init(cx);
         edit_prediction_ui::init(cx);
@@ -1346,6 +1345,11 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
 }
 
 async fn authenticate(client: Arc<Client>, cx: &AsyncApp) -> Result<()> {
+    if cx.update(|cx| ReleaseChannel::try_global(cx) == Some(ReleaseChannel::Dev)) {
+        client.sign_out(cx).await;
+        return Ok(());
+    }
+
     if stdout_is_a_pty() {
         if client::IMPERSONATE_LOGIN.is_some() {
             client.sign_in_with_optional_connect(false, cx).await?;
@@ -1635,18 +1639,25 @@ pub(crate) async fn restorable_workspace_locations(
 }
 
 fn init_paths() -> HashMap<io::ErrorKind, Vec<&'static Path>> {
+    let mut errors = HashMap::default();
+
+    for path in [paths::config_dir().as_path(), paths::data_dir().as_path()] {
+        if let Err(e) = paths::ensure_directory(path) {
+            errors.entry(e.kind()).or_insert_with(Vec::new).push(path);
+        }
+    }
+
     [
-        paths::config_dir(),
-        paths::extensions_dir(),
-        paths::languages_dir(),
-        paths::debug_adapters_dir(),
-        paths::database_dir(),
-        paths::logs_dir(),
-        paths::temp_dir(),
-        paths::hang_traces_dir(),
+        paths::extensions_dir().as_path(),
+        paths::languages_dir().as_path(),
+        paths::debug_adapters_dir().as_path(),
+        paths::database_dir().as_path(),
+        paths::logs_dir().as_path(),
+        paths::temp_dir().as_path(),
+        paths::hang_traces_dir().as_path(),
     ]
     .into_iter()
-    .fold(HashMap::default(), |mut errors, path| {
+    .fold(errors, |mut errors, path| {
         if let Err(e) = std::fs::create_dir_all(path) {
             errors.entry(e.kind()).or_insert_with(Vec::new).push(path);
         }

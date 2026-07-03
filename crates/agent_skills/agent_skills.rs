@@ -179,8 +179,8 @@ impl SkillSource {
     }
 }
 
-/// App-wide index of loaded skills, published by NativeAgent and read
-/// by any UI that needs to display the skill list (e.g. Settings UI).
+/// App-wide index of loaded skills, published for any UI that needs to
+/// display the skill list (e.g. Settings UI).
 #[derive(Default)]
 pub struct SkillIndex {
     pub global_skills: Vec<Skill>,

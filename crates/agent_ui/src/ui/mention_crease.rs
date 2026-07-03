@@ -1,7 +1,7 @@
 use std::{path::PathBuf, time::Duration};
 
-use acp_thread::MentionUri;
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::MentionUri;
+use agent_thread::protocol;
 use editor::Editor;
 use gpui::{
     Animation, AnimationExt, AnyView, Context, IntoElement, TaskExt, WeakEntity, Window,
@@ -394,7 +394,7 @@ fn reveal_in_project_panel(
 
 fn open_thread(
     workspace: &mut Workspace,
-    id: acp::SessionId,
+    id: protocol::SessionId,
     name: String,
     window: &mut Window,
     cx: &mut Context<Workspace>,
@@ -405,23 +405,24 @@ fn open_thread(
         return;
     };
 
-    // Right now we only support loading threads in the native agent.
     panel.update(cx, |panel, cx| {
-        let thread_id = ThreadMetadataStore::try_global(cx)
-            .and_then(|store| store.read(cx).entry_by_session(&id).map(|m| m.thread_id));
-        if let Some(thread_id) = thread_id {
+        let metadata = ThreadMetadataStore::try_global(cx)
+            .and_then(|store| store.read(cx).entry_by_session(&id).cloned());
+        if let Some(metadata) = metadata {
             panel.load_agent_thread(
-                Agent::NativeAgent,
-                thread_id,
-                None,
-                Some(name.into()),
+                Agent::from(metadata.agent_id.clone()),
+                metadata.thread_id,
+                Some(metadata.folder_paths().clone()),
+                Some(name.into()).or(metadata.title.clone()),
                 true,
                 AgentThreadSource::AgentPanel,
                 window,
                 cx,
             );
         } else {
-            panel.open_thread(id, None, Some(name.into()), window, cx);
+            log::warn!(
+                "cannot open mentioned thread {id}: no thread metadata exists and native Zed Agent has been removed"
+            );
         }
     });
 }

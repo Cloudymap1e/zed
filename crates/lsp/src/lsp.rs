@@ -1135,7 +1135,10 @@ impl LanguageServer {
             Self::notify_internal::<notification::Exit>(&notification_serializers, ()).ok();
             notification_serializers.close();
             output_done.recv().await;
-            server.lock().take().map(|mut child| child.kill());
+            let child = server.lock().take();
+            if let Some(mut child) = child {
+                util::command::kill_and_reap(&mut child).await.ok();
+            }
             drop(tasks);
             log::debug!("language server shutdown finished");
             Some(())

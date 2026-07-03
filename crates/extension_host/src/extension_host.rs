@@ -85,7 +85,7 @@ static SUPPRESSED_EXTENSIONS: LazyLock<FxHashSet<&str>> = LazyLock::new(|| {
         "ty",
         "basedpyright",
         "basher",
-        // ACP
+        // Legacy External Agent extension IDs
         "opencode",
         "mistral-vibe",
         "auggie",
@@ -1460,7 +1460,10 @@ impl ExtensionStore {
             cx.background_spawn({
                 let fs = fs.clone();
                 async move {
-                    let _ = join_all(server_removal_tasks).await;
+                    for result in join_all(server_removal_tasks).await {
+                        result.log_err();
+                    }
+
                     for theme_path in themes_to_add {
                         proxy
                             .load_user_theme(theme_path, fs.clone())

@@ -279,6 +279,10 @@ impl Onboarding {
     }
 
     fn handle_sign_in(&mut self, _: &SignIn, window: &mut Window, cx: &mut Context<Self>) {
+        if client::zed_account_auth_disabled(cx) {
+            return;
+        }
+
         let client = Client::global(cx);
         let workspace = self.workspace.clone();
 

@@ -2459,13 +2459,37 @@ impl GitRepository for RealGitRepository {
     ) -> BoxFuture<'_, Result<()>> {
         let git = self.git_binary_in_worktree();
         let executor = self.executor.clone();
+        let git_dir = self.git_dir.clone();
+        let help_output = self.any_git_binary_help_output();
         // Note: Do not spawn this command on the background thread, it might pop open the credential helper
         // which we want to block on.
         async move {
             let git = git?;
-            let mut cmd = git.build_command(&["commit", "--quiet", "-m"]);
+            let message_file_path = git_dir.join(format!("ZED_COMMIT_EDITMSG_{}", Uuid::new_v4()));
+            let _remove_message_file = util::defer({
+                let message_file_path = message_file_path.clone();
+                move || {
+                    std::fs::remove_file(&message_file_path).log_err();
+                }
+            });
+            smol::fs::write(&message_file_path, message.as_ref()).await?;
+
+            if options.signoff {
+                apply_commit_signoff(&git, &message_file_path, env.as_ref()).await?;
+            }
+
+            run_commit_msg_hook(
+                &git,
+                &git_dir,
+                help_output.await,
+                &message_file_path,
+                env.as_ref(),
+            )
+            .await?;
+
+            let mut cmd = git.build_command(&["commit", "--quiet", "--file"]);
             cmd.envs(env.iter())
-                .arg(&message.to_string())
+                .arg(&message_file_path)
                 .arg("--cleanup=strip")
                 .arg("--no-verify")
                 .stdout(Stdio::piped())
@@ -2473,10 +2497,6 @@ impl GitRepository for RealGitRepository {
 
             if options.amend {
                 cmd.arg("--amend");
-            }
-
-            if options.signoff {
-                cmd.arg("--signoff");
             }
 
             if options.allow_empty {
@@ -3276,6 +3296,166 @@ impl GitRepository for RealGitRepository {
     fn is_trusted(&self) -> bool {
         self.is_trusted.load(std::sync::atomic::Ordering::Acquire)
     }
+}
+
+async fn apply_commit_signoff(
+    git_binary: &GitBinary,
+    message_file_path: &Path,
+    env: &HashMap<String, String>,
+) -> Result<()> {
+    let output = git_binary
+        .build_command(&["var", "GIT_COMMITTER_IDENT"])
+        .envs(env.iter())
+        .output()
+        .await?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        GitBinaryCommandError {
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            status: output.status,
+        }
+    );
+
+    let committer_ident = String::from_utf8(output.stdout)?;
+    let signoff = commit_signoff_trailer(&committer_ident)
+        .with_context(|| "Could not determine git committer for signoff")?;
+    let output = git_binary
+        .build_command(&[
+            "interpret-trailers",
+            "--in-place",
+            "--if-exists=addIfDifferent",
+            "--if-missing=add",
+            "--trailer",
+            &signoff,
+        ])
+        .arg(message_file_path)
+        .envs(env.iter())
+        .output()
+        .await?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        GitBinaryCommandError {
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            status: output.status,
+        }
+    );
+
+    Ok(())
+}
+
+fn commit_signoff_trailer(committer_ident: &str) -> Option<String> {
+    let committer_ident = committer_ident.trim();
+    let email_end = committer_ident.rfind('>')?;
+    let email_start = committer_ident[..email_end].rfind('<')?;
+    let name = committer_ident[..email_start].trim();
+    let email = committer_ident[email_start..=email_end].trim();
+    if name.is_empty() || email == "<>" {
+        return None;
+    }
+    Some(format!("Signed-off-by: {name} {email}"))
+}
+
+async fn run_commit_msg_hook(
+    git_binary: &GitBinary,
+    git_dir: &Path,
+    help_output: SharedString,
+    message_file_path: &Path,
+    env: &HashMap<String, String>,
+) -> Result<()> {
+    if !git_binary.is_trusted {
+        return Ok(());
+    }
+
+    if help_output
+        .lines()
+        .any(|line| line.trim().starts_with("hook "))
+    {
+        let output = git_binary
+            .build_command(&["hook", "run", "--ignore-missing", "commit-msg", "--"])
+            .arg(message_file_path)
+            .envs(env.iter())
+            .output()
+            .await?;
+
+        anyhow::ensure!(
+            output.status.success(),
+            GitBinaryCommandError {
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                status: output.status,
+            }
+        );
+        return Ok(());
+    }
+
+    let hook_abs_path = commit_msg_hook_path(git_binary, git_dir, env).await;
+    if is_executable_hook(&hook_abs_path) {
+        #[allow(
+            clippy::disallowed_methods,
+            reason = "Fallback hook execution runs the hook script itself, not the git binary"
+        )]
+        let output = new_command(&hook_abs_path)
+            .arg(message_file_path)
+            .envs(env.iter())
+            .current_dir(&git_binary.working_directory)
+            .output()
+            .await?;
+
+        anyhow::ensure!(
+            output.status.success(),
+            GitBinaryCommandError {
+                stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+                status: output.status,
+            }
+        );
+    }
+
+    Ok(())
+}
+
+async fn commit_msg_hook_path(
+    git_binary: &GitBinary,
+    git_dir: &Path,
+    env: &HashMap<String, String>,
+) -> PathBuf {
+    let output = git_binary
+        .build_command(&["config", "--path", "--get", "core.hooksPath"])
+        .envs(env.iter())
+        .output()
+        .await;
+
+    if let Ok(output) = output
+        && output.status.success()
+    {
+        let hooks_path = String::from_utf8_lossy(&output.stdout);
+        let hooks_path = PathBuf::from(hooks_path.trim());
+        let hooks_path = if hooks_path.is_absolute() {
+            hooks_path
+        } else {
+            git_binary.working_directory.join(hooks_path)
+        };
+        return hooks_path.join("commit-msg");
+    }
+
+    git_dir.join("hooks").join("commit-msg")
+}
+
+#[cfg(unix)]
+fn is_executable_hook(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable_hook(path: &Path) -> bool {
+    path.is_file()
 }
 
 async fn run_commit_data_reader(
@@ -4561,6 +4741,112 @@ mod tests {
         assert_eq!(
             path,
             git_directory.join(format!("index-{}.tmp", Uuid::nil()))
+        );
+    }
+
+    #[gpui::test]
+    #[cfg(unix)]
+    async fn test_commit_runs_commit_msg_hook(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt;
+
+        disable_git_global_config();
+        cx.executor().allow_parking();
+
+        let repo_dir = tempfile::tempdir().unwrap();
+        git_init_repo(repo_dir.path());
+        let hook_path = repo_dir.path().join(".git/hooks/commit-msg");
+        smol::fs::write(
+            &hook_path,
+            "#!/bin/sh\nprintf '\\nHooked: yes\\n' >> \"$1\"\n",
+        )
+        .await
+        .unwrap();
+        let mut permissions = std::fs::metadata(&hook_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&hook_path, permissions).unwrap();
+
+        let file_path = repo_dir.path().join("file");
+        smol::fs::write(&file_path, "initial").await.unwrap();
+
+        let repo = RealGitRepository::new(
+            &repo_dir.path().join(".git"),
+            None,
+            Some("git".into()),
+            cx.executor(),
+        )
+        .unwrap();
+        repo.set_trusted(true);
+
+        repo.stage_paths(vec![repo_path("file")], Arc::new(HashMap::default()))
+            .await
+            .unwrap();
+        repo.commit(
+            "Initial commit".into(),
+            None,
+            CommitOptions::default(),
+            AskPassDelegate::new(&mut cx.to_async(), |_, _, _| {}),
+            Arc::new(checkpoint_author_envs()),
+        )
+        .await
+        .unwrap();
+
+        let commit = repo.show("HEAD".to_string()).await.unwrap();
+        assert!(commit.message.contains("Initial commit"));
+        assert!(commit.message.contains("Hooked: yes"));
+    }
+
+    #[gpui::test]
+    #[cfg(unix)]
+    async fn test_commit_signoff_is_applied_before_commit_msg_hook(cx: &mut TestAppContext) {
+        use std::os::unix::fs::PermissionsExt;
+
+        disable_git_global_config();
+        cx.executor().allow_parking();
+
+        let repo_dir = tempfile::tempdir().unwrap();
+        git_init_repo(repo_dir.path());
+        let git_dir = repo_dir.path().join(".git");
+        let hook_path = repo_dir.path().join(".git/hooks/commit-msg");
+        smol::fs::write(
+            &hook_path,
+            "#!/bin/sh\ngrep -q '^Signed-off-by: Zed <hi@zed.dev>$' \"$1\" || exit 42\nprintf '\\nHooked: signoff seen\\n' >> \"$1\"\n",
+        )
+        .await
+        .unwrap();
+        let mut permissions = std::fs::metadata(&hook_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&hook_path, permissions).unwrap();
+
+        let message_file_path = repo_dir.path().join(".git/ZED_COMMIT_EDITMSG_test");
+        smol::fs::write(&message_file_path, "Initial commit")
+            .await
+            .unwrap();
+        let git = GitBinary::new(
+            PathBuf::from("git"),
+            repo_dir.path().to_path_buf(),
+            repo_dir.path().join(".git"),
+            cx.executor(),
+            true,
+        );
+        let env = checkpoint_author_envs();
+
+        apply_commit_signoff(&git, &message_file_path, &env)
+            .await
+            .unwrap();
+        run_commit_msg_hook(&git, &git_dir, "".into(), &message_file_path, &env)
+            .await
+            .unwrap();
+
+        let message = smol::fs::read_to_string(&message_file_path).await.unwrap();
+        assert!(message.contains("Hooked: signoff seen"));
+        assert_eq!(message.matches("Signed-off-by:").count(), 1);
+    }
+
+    #[test]
+    fn test_commit_signoff_trailer_parses_committer_ident() {
+        assert_eq!(
+            commit_signoff_trailer("Zed <hi@zed.dev> 1710000000 +0000").as_deref(),
+            Some("Signed-off-by: Zed <hi@zed.dev>")
         );
     }
 

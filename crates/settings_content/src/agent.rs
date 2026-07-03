@@ -749,7 +749,7 @@ pub enum CustomAgentServerSettings {
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         favorite_config_option_values: HashMap<String, Vec<String>>,
     },
-    // Used for the ACP extension migration
+    // Used for the legacy External Agent extension migration
     #[serde(alias = "extension")]
     Registry {
         /// Additional environment variables to pass to the agent.

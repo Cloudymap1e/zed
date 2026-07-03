@@ -10,6 +10,7 @@ use std::{pin::Pin, sync::Arc};
 use crate::oauth::{self, OAuthTokenProvider, WwwAuthenticate};
 use crate::transport::Transport;
 use crate::types;
+use util::ResultExt as _;
 
 /// Typed errors returned by the HTTP transport that callers can downcast from
 /// `anyhow::Error` to handle specific failure modes.
@@ -375,10 +376,8 @@ impl Drop for HttpTransport {
                             request_builder.header(HEADER_PROTOCOL_VERSION, version.as_str());
                     }
 
-                    let request = request_builder.body(AsyncBody::empty());
-
-                    if let Ok(request) = request {
-                        let _ = http_client.send(request).await;
+                    if let Some(request) = request_builder.body(AsyncBody::empty()).log_err() {
+                        http_client.send(request).await.log_err();
                     }
                 })
                 .detach();

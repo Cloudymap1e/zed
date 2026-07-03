@@ -10,14 +10,21 @@ use util::command::{Stdio, new_command};
 
 pub(crate) struct CargoLocator;
 
+struct CargoTestExecutable {
+    executable: String,
+    test_name: Option<String>,
+}
+
+struct ListedTestMatch<'a> {
+    listed_test_name: &'a str,
+    update_test_name: bool,
+}
+
 async fn find_best_executable(
     executables: &[String],
     test_name: &str,
     executor: BackgroundExecutor,
-) -> Option<String> {
-    if executables.len() == 1 {
-        return executables.first().cloned();
-    }
+) -> Option<CargoTestExecutable> {
     for executable in executables {
         let Some(mut child) = new_command(&executable)
             .arg("--list")
@@ -45,8 +52,13 @@ async fn find_best_executable(
             log::warn!("Failed to list tests for {executable}: {err}");
         } else {
             for line in test_lines.lines() {
-                if line.contains(&test_name) {
-                    return Some(executable.clone());
+                if let Some(listed_test_match) = listed_test_name_matching(line, test_name) {
+                    return Some(CargoTestExecutable {
+                        executable: executable.clone(),
+                        test_name: listed_test_match
+                            .update_test_name
+                            .then(|| listed_test_match.listed_test_name.to_owned()),
+                    });
                 }
             }
         }
@@ -54,6 +66,37 @@ async fn find_best_executable(
     }
     None
 }
+
+fn listed_test_name_matching<'a>(line: &'a str, test_name: &str) -> Option<ListedTestMatch<'a>> {
+    let listed_test_name = line
+        .strip_suffix(": test")
+        .or_else(|| line.strip_suffix(": benchmark"))?
+        .trim();
+
+    if listed_test_name == test_name {
+        Some(ListedTestMatch {
+            listed_test_name,
+            update_test_name: false,
+        })
+    } else if listed_test_name
+        .rsplit("::")
+        .next()
+        .is_some_and(|leaf_name| leaf_name == test_name)
+    {
+        Some(ListedTestMatch {
+            listed_test_name,
+            update_test_name: true,
+        })
+    } else if listed_test_name.contains(test_name) {
+        Some(ListedTestMatch {
+            listed_test_name,
+            update_test_name: false,
+        })
+    } else {
+        None
+    }
+}
+
 #[async_trait]
 impl DapLocator for CargoLocator {
     fn name(&self) -> SharedString {
@@ -204,7 +247,17 @@ impl DapLocator for CargoLocator {
             }
         };
 
-        let Some(executable) = executable.or_else(|| executables.first().cloned()) else {
+        if let Some(resolved_test_name) = executable
+            .as_ref()
+            .and_then(|executable| executable.test_name.clone())
+        {
+            test_name = Some(resolved_test_name);
+        }
+
+        let Some(executable) = executable
+            .map(|executable| executable.executable)
+            .or_else(|| executables.first().cloned())
+        else {
             anyhow::bail!("Couldn't get executable in cargo locator");
         };
 
@@ -238,7 +291,16 @@ fn build_test_binary_args(test_name: Option<&str>, is_test: bool, is_ignored: bo
 
 #[cfg(test)]
 mod tests {
-    use super::build_test_binary_args;
+    use super::{build_test_binary_args, listed_test_name_matching};
+
+    fn matching_test_name(line: &str, test_name: &str) -> Option<(String, bool)> {
+        listed_test_name_matching(line, test_name).map(|matched| {
+            (
+                matched.listed_test_name.to_owned(),
+                matched.update_test_name,
+            )
+        })
+    }
 
     #[test]
     fn non_test_invocation_has_no_test_args() {
@@ -284,6 +346,32 @@ mod tests {
                 "variant_get::test::get_complex_variant".to_owned(),
                 "--nocapture".to_owned(),
             ],
+        );
+    }
+
+    #[test]
+    fn test_listed_test_name_matching_resolves_nested_rust_tests() {
+        assert_eq!(
+            matching_test_name(
+                "variant_get::test::get_complex_variant: test",
+                "get_complex_variant"
+            ),
+            Some(("variant_get::test::get_complex_variant".to_owned(), true))
+        );
+        assert_eq!(
+            matching_test_name("get_complex_variant: test", "get_complex_variant"),
+            Some(("get_complex_variant".to_owned(), false))
+        );
+        assert_eq!(
+            matching_test_name(
+                "variant_get::test::get_complex_variant: test",
+                "variant_get::test"
+            ),
+            Some(("variant_get::test::get_complex_variant".to_owned(), false))
+        );
+        assert_eq!(
+            matching_test_name("other::test_name: test", "get_complex_variant"),
+            None
         );
     }
 }

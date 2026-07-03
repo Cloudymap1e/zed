@@ -1852,7 +1852,10 @@ impl EditPredictionStore {
             EditPredictionModel::Zeta => {
                 let is_cloud = !matches!(
                     all_language_settings(None, cx).edit_predictions.provider,
-                    EditPredictionProvider::Ollama | EditPredictionProvider::OpenAiCompatibleApi
+                    EditPredictionProvider::Ollama
+                        | EditPredictionProvider::OpenAiCompatibleApi
+                        | EditPredictionProvider::Groq
+                        | EditPredictionProvider::Cerebras
                 );
                 if is_cloud {
                     zeta::edit_prediction_accepted(self, current_prediction, cx)
@@ -2236,7 +2239,10 @@ impl EditPredictionStore {
             EditPredictionModel::Zeta => {
                 let is_cloud = !matches!(
                     all_language_settings(None, cx).edit_predictions.provider,
-                    EditPredictionProvider::Ollama | EditPredictionProvider::OpenAiCompatibleApi
+                    EditPredictionProvider::Ollama
+                        | EditPredictionProvider::OpenAiCompatibleApi
+                        | EditPredictionProvider::Groq
+                        | EditPredictionProvider::Cerebras
                 );
 
                 if is_cloud {
@@ -2476,7 +2482,9 @@ fn is_ep_store_provider(provider: EditPredictionProvider) -> bool {
         EditPredictionProvider::Zed
         | EditPredictionProvider::Mercury
         | EditPredictionProvider::Ollama
-        | EditPredictionProvider::OpenAiCompatibleApi => true,
+        | EditPredictionProvider::OpenAiCompatibleApi
+        | EditPredictionProvider::Groq
+        | EditPredictionProvider::Cerebras => true,
         EditPredictionProvider::None
         | EditPredictionProvider::Copilot
         | EditPredictionProvider::Codestral => false,
@@ -2499,7 +2507,9 @@ impl EditPredictionStore {
             match all_language_settings(None, cx).edit_predictions.provider {
                 EditPredictionProvider::Zed | EditPredictionProvider::Mercury => (true, 2),
                 EditPredictionProvider::Ollama => (false, 1),
-                EditPredictionProvider::OpenAiCompatibleApi => (false, 2),
+                EditPredictionProvider::OpenAiCompatibleApi
+                | EditPredictionProvider::Groq
+                | EditPredictionProvider::Cerebras => (false, 2),
                 EditPredictionProvider::None
                 | EditPredictionProvider::Copilot
                 | EditPredictionProvider::Codestral => {

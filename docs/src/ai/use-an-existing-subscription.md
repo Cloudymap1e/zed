@@ -9,7 +9,7 @@ Use this page when you already pay for an AI product and want to know how it fit
 
 Some subscriptions work as Zed model providers. Others are used through an External Agent or terminal CLI.
 
-| Subscription                  | Zed AI features                                      | External Agent via ACP                | Terminal Thread                | Notes                                                            |
+| Subscription                  | Zed AI features                                      | External Agent                | Terminal Thread                | Notes                                                            |
 | ----------------------------- | ---------------------------------------------------- | ------------------------------------- | ------------------------------ | ---------------------------------------------------------------- |
 | Zed Pro, Business, or Student | [Zed-hosted models](../account/zed-hosted-models.md) | No                                    | No                             | Billed through Zed                                               |
 | ChatGPT Plus / Pro            | ChatGPT Subscription                                 | Codex where supported                 | Codex CLI                      | Sign in with OpenAI in Zed; separate from OpenAI API keys        |

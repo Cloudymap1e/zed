@@ -6,7 +6,7 @@ use db::AppDatabase;
 use extension::ExtensionHostProxy;
 use fs::RealFs;
 use gpui::http_client::read_proxy_from_env;
-use gpui::{App, AppContext as _, Entity};
+use gpui::{App, AppContext as _};
 use gpui_tokio::Tokio;
 use language::LanguageRegistry;
 use language_extension::LspAccess;
@@ -18,15 +18,7 @@ use reqwest_client::ReqwestClient;
 use settings::{Settings, SettingsStore};
 use util::ResultExt as _;
 
-pub struct AgentCliAppState {
-    pub languages: Arc<LanguageRegistry>,
-    pub client: Arc<Client>,
-    pub user_store: Entity<UserStore>,
-    pub fs: Arc<dyn fs::Fs>,
-    pub node_runtime: NodeRuntime,
-}
-
-pub fn init(cx: &mut App) -> Arc<AgentCliAppState> {
+pub fn init(cx: &mut App) {
     let app_commit_sha = option_env!("ZED_COMMIT_SHA").map(|s| AppCommitSha::new(s.to_owned()));
 
     let app_version = AppVersion::load(
@@ -43,7 +35,7 @@ pub fn init(cx: &mut App) -> Arc<AgentCliAppState> {
     theme_settings::init(theme::LoadThemes::JustBase, cx);
 
     let user_agent = format!(
-        "Zed Agent CLI/{} ({}; {})",
+        "Zed Eval CLI/{} ({}; {})",
         app_version,
         std::env::consts::OS,
         std::env::consts::ARCH
@@ -120,7 +112,7 @@ pub fn init(cx: &mut App) -> Arc<AgentCliAppState> {
     // The eval CLI runs headless with no controlling TTY, so PTY allocation and
     // acquiring a controlling terminal fail with `ENOTTY`. Tell the agent to run
     // its terminal commands without a PTY (and non-interactively) instead.
-    cx.set_global(acp_thread::HeadlessTerminal(true));
+    cx.set_global(agent_thread::HeadlessTerminal(true));
 
     let stdout_is_a_pty = false;
     let prompt_builder = PromptBuilder::load(fs.clone(), stdout_is_a_pty, cx);
@@ -132,12 +124,4 @@ pub fn init(cx: &mut App) -> Arc<AgentCliAppState> {
         true,
         cx,
     );
-
-    Arc::new(AgentCliAppState {
-        languages,
-        client,
-        user_store,
-        fs,
-        node_runtime,
-    })
 }

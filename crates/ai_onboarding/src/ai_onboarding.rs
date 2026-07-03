@@ -185,6 +185,21 @@ impl ZedAiOnboarding {
             .into_any_element()
     }
 
+    fn render_dev_auth_disabled(&self) -> AnyElement {
+        v_flex()
+            .w_full()
+            .relative()
+            .gap_1()
+            .child(Headline::new("Zed AI account sign-in is disabled"))
+            .child(
+                Label::new("Zed account authentication is disabled in Zed Dev.")
+                    .color(Color::Muted)
+                    .mb_2(),
+            )
+            .children(self.render_dismiss_button())
+            .into_any_element()
+    }
+
     fn render_free_plan_state(&self, cx: &mut App) -> AnyElement {
         if self.account_too_young {
             v_flex()
@@ -376,7 +391,9 @@ impl ZedAiOnboarding {
 
 impl RenderOnce for ZedAiOnboarding {
     fn render(self, _window: &mut ui::Window, cx: &mut App) -> impl IntoElement {
-        if matches!(self.sign_in_status, SignInStatus::SignedIn) {
+        if client::zed_account_auth_disabled(cx) {
+            self.render_dev_auth_disabled()
+        } else if matches!(self.sign_in_status, SignInStatus::SignedIn) {
             match self.plan {
                 None => self.render_free_plan_state(cx),
                 Some(Plan::ZedFree) => self.render_free_plan_state(cx),

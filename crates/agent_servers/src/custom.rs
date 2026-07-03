@@ -1,8 +1,7 @@
 use crate::{AgentServer, AgentServerDelegate, load_proxy_env};
-use acp_thread::AgentConnection;
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::{AgentConnection, protocol as agent_protocol};
 use anyhow::{Context as _, Result};
-use collections::HashSet;
+use collections::{HashMap, HashSet};
 use fs::Fs;
 use gpui::{App, AppContext as _, Entity, Task};
 use language_model::{ApiKey, EnvVar};
@@ -39,7 +38,7 @@ impl AgentServer for CustomAgentServer {
         IconName::Terminal
     }
 
-    fn default_mode(&self, cx: &App) -> Option<acp::SessionModeId> {
+    fn default_mode(&self, cx: &App) -> Option<agent_protocol::SessionModeId> {
         let settings = cx.read_global(|settings: &SettingsStore, _| {
             settings
                 .get::<AllAgentServersSettings>(None)
@@ -49,14 +48,14 @@ impl AgentServer for CustomAgentServer {
 
         settings
             .as_ref()
-            .and_then(|s| s.default_mode().map(acp::SessionModeId::new))
+            .and_then(|s| s.default_mode().map(agent_protocol::SessionModeId::new))
     }
 
     fn favorite_config_option_value_ids(
         &self,
-        config_id: &acp::SessionConfigId,
+        config_id: &agent_protocol::SessionConfigId,
         cx: &mut App,
-    ) -> HashSet<acp::SessionConfigValueId> {
+    ) -> HashSet<agent_protocol::SessionConfigValueId> {
         let settings = cx.read_global(|settings: &SettingsStore, _| {
             settings
                 .get::<AllAgentServersSettings>(None)
@@ -71,7 +70,7 @@ impl AgentServer for CustomAgentServer {
                 values
                     .iter()
                     .cloned()
-                    .map(acp::SessionConfigValueId::new)
+                    .map(agent_protocol::SessionConfigValueId::new)
                     .collect()
             })
             .unwrap_or_default()
@@ -79,8 +78,8 @@ impl AgentServer for CustomAgentServer {
 
     fn toggle_favorite_config_option_value(
         &self,
-        config_id: acp::SessionConfigId,
-        value_id: acp::SessionConfigValueId,
+        config_id: agent_protocol::SessionConfigId,
+        value_id: agent_protocol::SessionConfigValueId,
         should_be_favorite: bool,
         fs: Arc<dyn Fs>,
         cx: &App,
@@ -124,7 +123,12 @@ impl AgentServer for CustomAgentServer {
         });
     }
 
-    fn set_default_mode(&self, mode_id: Option<acp::SessionModeId>, fs: Arc<dyn Fs>, cx: &mut App) {
+    fn set_default_mode(
+        &self,
+        mode_id: Option<agent_protocol::SessionModeId>,
+        fs: Arc<dyn Fs>,
+        cx: &mut App,
+    ) {
         let agent_id = self.agent_id();
         update_settings_file(fs, cx, move |settings, _cx| {
             let settings = settings
@@ -232,12 +236,7 @@ impl AgentServer for CustomAgentServer {
                     extra_env.insert("ANTHROPIC_API_KEY".into(), "".into());
                 }
                 CODEX_ID => {
-                    if let Ok(api_key) = std::env::var("CODEX_API_KEY") {
-                        extra_env.insert("CODEX_API_KEY".into(), api_key);
-                    }
-                    if let Ok(api_key) = std::env::var("OPEN_AI_API_KEY") {
-                        extra_env.insert("OPEN_AI_API_KEY".into(), api_key);
-                    }
+                    add_codex_env(&mut extra_env);
                 }
                 GEMINI_ID => {
                     extra_env.insert("SURFACE".to_owned(), "zed".to_owned());
@@ -247,6 +246,16 @@ impl AgentServer for CustomAgentServer {
         }
         let store = delegate.store.downgrade();
         cx.spawn(async move |cx| {
+            if agent_id.as_ref() == CODEX_ID {
+                return crate::codex_native::connect(
+                    agent_id,
+                    project,
+                    extra_env.into_iter().collect(),
+                    cx,
+                )
+                .await;
+            }
+
             if is_registry_agent && agent_id.as_ref() == GEMINI_ID {
                 if let Some(api_key) = cx.update(api_key_for_gemini_cli).await.ok() {
                     extra_env.insert("GEMINI_API_KEY".into(), api_key);
@@ -266,7 +275,7 @@ impl AgentServer for CustomAgentServer {
                     anyhow::Ok(agent.get_command(vec![], extra_env, &mut cx.to_async()))
                 })??
                 .await?;
-            let connection = crate::acp::connect(
+            let connection = crate::external_agent::connect(
                 agent_id,
                 project,
                 command,
@@ -282,6 +291,15 @@ impl AgentServer for CustomAgentServer {
 
     fn into_any(self: Rc<Self>) -> Rc<dyn std::any::Any> {
         self
+    }
+}
+
+fn add_codex_env(extra_env: &mut HashMap<String, String>) {
+    if let Ok(api_key) = std::env::var("CODEX_API_KEY") {
+        extra_env.insert("CODEX_API_KEY".into(), api_key);
+    }
+    if let Ok(api_key) = std::env::var("OPEN_AI_API_KEY") {
+        extra_env.insert("OPEN_AI_API_KEY".into(), api_key);
     }
 }
 

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use super::symbol_locator::{LocationDisplay, SymbolLocator};
 use crate::{AgentTool, ToolCallEventStream, ToolInput};
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::protocol;
 use gpui::{App, Entity, SharedString, Task};
 use project::Project;
 use schemars::JsonSchema;
@@ -36,8 +36,8 @@ impl AgentTool for FindReferencesTool {
 
     const NAME: &'static str = "find_references";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Search
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Search
     }
 
     fn initial_title(

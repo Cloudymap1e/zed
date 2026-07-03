@@ -1,5 +1,5 @@
 use action_log::ActionLog;
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::protocol;
 use anyhow::{Context as _, Result, anyhow};
 use futures::FutureExt as _;
 use gpui::{App, Entity, SharedString, Task};
@@ -109,8 +109,8 @@ async fn read_global_skill_file(
 ) -> Result<LanguageModelToolResultContent, LanguageModelToolResultContent> {
     let content = fs.load(canonical_path).await.map_err(tool_content_err)?;
 
-    event_stream.update_fields(acp::ToolCallUpdateFields::new().locations(vec![
-        acp::ToolCallLocation::new(canonical_path)
+    event_stream.update_fields(protocol::ToolCallUpdateFields::new().locations(vec![
+        protocol::ToolCallLocation::new(canonical_path)
             .line(start_line.map(|line| line.saturating_sub(1))),
     ]));
 
@@ -134,8 +134,8 @@ async fn read_global_skill_file(
         text: &result_text,
     }
     .to_string();
-    event_stream.update_fields(acp::ToolCallUpdateFields::new().content(vec![
-        acp::ToolCallContent::Content(acp::Content::new(markdown)),
+    event_stream.update_fields(protocol::ToolCallUpdateFields::new().content(vec![
+        protocol::ToolCallContent::Content(protocol::Content::new(markdown)),
     ]));
 
     Ok(result_text.into())
@@ -211,8 +211,8 @@ impl AgentTool for ReadFileTool {
 
     const NAME: &'static str = "read_file";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Read
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Read
     }
 
     fn initial_title(
@@ -356,8 +356,8 @@ impl AgentTool for ReadFileTool {
             let file_path = input.path.clone();
 
             cx.update(|_cx| {
-                event_stream.update_fields(acp::ToolCallUpdateFields::new().locations(vec![
-                    acp::ToolCallLocation::new(&abs_path)
+                event_stream.update_fields(protocol::ToolCallUpdateFields::new().locations(vec![
+                    protocol::ToolCallLocation::new(&abs_path)
                         .line(input.start_line.map(|line| line.saturating_sub(1))),
                 ]));
             });
@@ -384,9 +384,9 @@ impl AgentTool for ReadFileTool {
                     .context("processing image")
                     .map_err(tool_content_err)?;
 
-                event_stream.update_fields(acp::ToolCallUpdateFields::new().content(vec![
-                    acp::ToolCallContent::Content(acp::Content::new(acp::ContentBlock::Image(
-                        acp::ImageContent::new(language_model_image.source.clone(), "image/png"),
+                event_stream.update_fields(protocol::ToolCallUpdateFields::new().content(vec![
+                    protocol::ToolCallContent::Content(protocol::Content::new(protocol::ContentBlock::Image(
+                        protocol::ImageContent::new(language_model_image.source.clone(), "image/png"),
                     ))),
                 ]));
 
@@ -503,8 +503,8 @@ impl AgentTool for ReadFileTool {
                     // so highlighting would be both expensive and incorrect.
                     let tag: &str = if is_outline_response { "" } else { &input.path };
                     let markdown = MarkdownCodeBlock { tag, text }.to_string();
-                    event_stream.update_fields(acp::ToolCallUpdateFields::new().content(vec![
-                        acp::ToolCallContent::Content(acp::Content::new(markdown)),
+                    event_stream.update_fields(protocol::ToolCallUpdateFields::new().content(vec![
+                        protocol::ToolCallContent::Content(protocol::Content::new(markdown)),
                     ]));
                 }
             });
@@ -526,8 +526,8 @@ impl AgentTool for ReadFileTool {
                 text: &text,
             }
             .to_string();
-            event_stream.update_fields(acp::ToolCallUpdateFields::new().content(vec![
-                acp::ToolCallContent::Content(acp::Content::new(markdown)),
+            event_stream.update_fields(protocol::ToolCallUpdateFields::new().content(vec![
+                protocol::ToolCallContent::Content(protocol::Content::new(markdown)),
             ]));
         }
 
@@ -775,13 +775,13 @@ mod test {
         let _location_update = rx.expect_update_fields().await;
         let content_update = rx.expect_update_fields().await;
         let content_blocks = content_update.content.expect("expected content update");
-        let acp::ToolCallContent::Content(content) = content_blocks
+        let protocol::ToolCallContent::Content(content) = content_blocks
             .first()
             .expect("expected at least one content block")
         else {
             panic!("expected ContentBlock, got {:?}", content_blocks.first());
         };
-        let acp::ContentBlock::Text(text) = &content.content else {
+        let protocol::ContentBlock::Text(text) = &content.content else {
             panic!("expected text content block, got {:?}", content.content);
         };
 
@@ -831,13 +831,13 @@ mod test {
         let _location_update = rx.expect_update_fields().await;
         let content_update = rx.expect_update_fields().await;
         let content_blocks = content_update.content.expect("expected content update");
-        let acp::ToolCallContent::Content(content) = content_blocks
+        let protocol::ToolCallContent::Content(content) = content_blocks
             .first()
             .expect("expected at least one content block")
         else {
             panic!("expected ContentBlock, got {:?}", content_blocks.first());
         };
-        let acp::ContentBlock::Text(text) = &content.content else {
+        let protocol::ContentBlock::Text(text) = &content.content else {
             panic!("expected text content block, got {:?}", content.content);
         };
 
@@ -1291,9 +1291,9 @@ mod test {
         );
         authorization
             .response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("allow"),
-                acp::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("allow"),
+                protocol::PermissionOptionKind::AllowOnce,
             ))
             .unwrap();
 
@@ -1583,9 +1583,9 @@ mod test {
         );
 
         auth.response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("allow"),
-                acp::PermissionOptionKind::AllowOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("allow"),
+                protocol::PermissionOptionKind::AllowOnce,
             ))
             .unwrap();
 

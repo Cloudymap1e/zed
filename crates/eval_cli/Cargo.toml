@@ -13,9 +13,7 @@ name = "eval-cli"
 path = "src/main.rs"
 
 [dependencies]
-acp_thread.workspace = true
-agent.workspace = true
-agent-client-protocol.workspace = true
+agent_thread.workspace = true
 agent_ui.workspace = true
 anyhow.workspace = true
 clap.workspace = true

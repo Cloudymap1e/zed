@@ -1,11 +1,11 @@
 use std::{cmp::Reverse, rc::Rc, sync::Arc};
 
-use acp_thread::AgentSessionConfigOptions;
-use agent_client_protocol::schema::v1 as acp;
 use agent_servers::AgentServer;
+use agent_thread::AgentSessionConfigOptions;
+use agent_thread::protocol;
 
 use collections::HashSet;
-use feature_flags::{AcpBetaFeatureFlag, FeatureFlagAppExt as _};
+use feature_flags::{ExternalAgentBetaFeatureFlag, FeatureFlagAppExt as _};
 use fs::Fs;
 use fuzzy::StringMatchCandidate;
 use gpui::{
@@ -36,7 +36,7 @@ pub struct ConfigOptionsView {
     selectors: Vec<Entity<ConfigOptionSelector>>,
     agent_server: Rc<dyn AgentServer>,
     fs: Arc<dyn Fs>,
-    config_option_ids: Vec<acp::SessionConfigId>,
+    config_option_ids: Vec<protocol::SessionConfigId>,
     _refresh_task: Task<()>,
 }
 
@@ -76,12 +76,12 @@ impl ConfigOptionsView {
 
     pub fn toggle_category_picker(
         &mut self,
-        category: acp::SessionConfigOptionCategory,
+        category: protocol::SessionConfigOptionCategory,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(config_id) = self.first_config_option_id_matching(category, |option| {
-            matches!(&option.kind, acp::SessionConfigKind::Select(_))
+            matches!(&option.kind, protocol::SessionConfigKind::Select(_))
         }) else {
             return false;
         };
@@ -95,7 +95,7 @@ impl ConfigOptionsView {
 
     pub fn cycle_category_option(
         &mut self,
-        category: acp::SessionConfigOptionCategory,
+        category: protocol::SessionConfigOptionCategory,
         favorites_only: bool,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -134,9 +134,9 @@ impl ConfigOptionsView {
 
     fn first_config_option_id_matching(
         &self,
-        category: acp::SessionConfigOptionCategory,
-        predicate: impl Fn(&acp::SessionConfigOption) -> bool,
-    ) -> Option<acp::SessionConfigId> {
+        category: protocol::SessionConfigOptionCategory,
+        predicate: impl Fn(&protocol::SessionConfigOption) -> bool,
+    ) -> Option<protocol::SessionConfigId> {
         self.config_options
             .config_options()
             .into_iter()
@@ -145,20 +145,22 @@ impl ConfigOptionsView {
     }
 
     fn can_cycle_config_option(
-        option: &acp::SessionConfigOption,
+        option: &protocol::SessionConfigOption,
         favorites_only: bool,
         render_boolean_config_options: bool,
     ) -> bool {
         match &option.kind {
-            acp::SessionConfigKind::Select(_) => true,
-            acp::SessionConfigKind::Boolean(_) => !favorites_only && render_boolean_config_options,
+            protocol::SessionConfigKind::Select(_) => true,
+            protocol::SessionConfigKind::Boolean(_) => {
+                !favorites_only && render_boolean_config_options
+            }
             _ => false,
         }
     }
 
     fn selector_for_config_id(
         &self,
-        config_id: &acp::SessionConfigId,
+        config_id: &protocol::SessionConfigId,
         cx: &App,
     ) -> Option<Entity<ConfigOptionSelector>> {
         self.selectors
@@ -169,10 +171,10 @@ impl ConfigOptionsView {
 
     fn next_value_for_config(
         &self,
-        config_id: &acp::SessionConfigId,
+        config_id: &protocol::SessionConfigId,
         favorites_only: bool,
         cx: &mut Context<Self>,
-    ) -> Option<acp::SessionConfigOptionValue> {
+    ) -> Option<protocol::SessionConfigOptionValue> {
         let option = self
             .config_options
             .config_options()
@@ -180,7 +182,7 @@ impl ConfigOptionsView {
             .find(|option| &option.id == config_id)?;
 
         match &option.kind {
-            acp::SessionConfigKind::Select(_) => {
+            protocol::SessionConfigKind::Select(_) => {
                 let mut options = extract_options(&self.config_options, config_id);
                 if options.is_empty() {
                     return None;
@@ -208,15 +210,15 @@ impl ConfigOptionsView {
                     (current_index + 1) % options.len()
                 };
 
-                Some(acp::SessionConfigOptionValue::value_id(
+                Some(protocol::SessionConfigOptionValue::value_id(
                     options[next_index].value.clone(),
                 ))
             }
-            acp::SessionConfigKind::Boolean(boolean) => {
+            protocol::SessionConfigKind::Boolean(boolean) => {
                 if favorites_only || !should_render_boolean_config_options(cx) {
                     None
                 } else {
-                    Some(acp::SessionConfigOptionValue::boolean(
+                    Some(protocol::SessionConfigOptionValue::boolean(
                         !boolean.current_value,
                     ))
                 }
@@ -227,7 +229,7 @@ impl ConfigOptionsView {
 
     fn config_option_ids(
         config_options: &Rc<dyn AgentSessionConfigOptions>,
-    ) -> Vec<acp::SessionConfigId> {
+    ) -> Vec<protocol::SessionConfigId> {
         config_options
             .config_options()
             .into_iter()
@@ -293,7 +295,7 @@ impl Render for ConfigOptionsView {
 
 struct ConfigOptionSelector {
     config_options: Rc<dyn AgentSessionConfigOptions>,
-    config_id: acp::SessionConfigId,
+    config_id: protocol::SessionConfigId,
     agent_server: Rc<dyn AgentServer>,
     fs: Arc<dyn Fs>,
     picker_handle: Option<PopoverMenuHandle<Picker<ConfigOptionPickerDelegate>>>,
@@ -304,7 +306,7 @@ struct ConfigOptionSelector {
 impl ConfigOptionSelector {
     pub fn new(
         config_options: Rc<dyn AgentSessionConfigOptions>,
-        config_id: acp::SessionConfigId,
+        config_id: protocol::SessionConfigId,
         agent_server: Rc<dyn AgentServer>,
         fs: Arc<dyn Fs>,
         window: &mut Window,
@@ -320,7 +322,7 @@ impl ConfigOptionSelector {
             .unwrap_or(0);
         let is_select = current_option
             .as_ref()
-            .is_some_and(|option| matches!(&option.kind, acp::SessionConfigKind::Select(_)));
+            .is_some_and(|option| matches!(&option.kind, protocol::SessionConfigKind::Select(_)));
 
         let is_searchable = option_count >= PICKER_THRESHOLD;
 
@@ -363,14 +365,14 @@ impl ConfigOptionSelector {
         }
     }
 
-    fn current_option(&self) -> Option<acp::SessionConfigOption> {
+    fn current_option(&self) -> Option<protocol::SessionConfigOption> {
         self.config_options
             .config_options()
             .into_iter()
             .find(|opt| opt.id == self.config_id)
     }
 
-    fn config_id(&self) -> &acp::SessionConfigId {
+    fn config_id(&self) -> &protocol::SessionConfigId {
         &self.config_id
     }
 
@@ -389,7 +391,7 @@ impl ConfigOptionSelector {
         };
 
         match &option.kind {
-            acp::SessionConfigKind::Select(select) => {
+            protocol::SessionConfigKind::Select(select) => {
                 find_option_name(&select.options, &select.current_value)
                     .unwrap_or_else(|| "Unknown".to_string())
             }
@@ -397,13 +399,16 @@ impl ConfigOptionSelector {
         }
     }
 
-    fn handles_category_keybindings(&self, category: &acp::SessionConfigOptionCategory) -> bool {
+    fn handles_category_keybindings(
+        &self,
+        category: &protocol::SessionConfigOptionCategory,
+    ) -> bool {
         self.config_options
             .config_options()
             .into_iter()
             .find(|option| {
                 option.category.as_ref() == Some(category)
-                    && matches!(&option.kind, acp::SessionConfigKind::Select(_))
+                    && matches!(&option.kind, protocol::SessionConfigKind::Select(_))
             })
             .is_some_and(|option| option.id == self.config_id)
     }
@@ -453,7 +458,7 @@ impl Render for ConfigOptionSelector {
         };
 
         match &option.kind {
-            acp::SessionConfigKind::Select(_) => {
+            protocol::SessionConfigKind::Select(_) => {
                 let (Some(picker), Some(picker_handle)) =
                     (self.picker.clone(), self.picker_handle.clone())
                 else {
@@ -494,7 +499,7 @@ impl Render for ConfigOptionSelector {
 
                     if show_category_keybindings && let Some(category) = &option_category {
                         match category {
-                            acp::SessionConfigOptionCategory::Mode => {
+                            protocol::SessionConfigOptionCategory::Mode => {
                                 content = content
                                     .child(action_tooltip_container(
                                         "Change Mode",
@@ -505,7 +510,7 @@ impl Render for ConfigOptionSelector {
                                         KeyBinding::for_action(&CycleModeSelector, cx),
                                     ));
                             }
-                            acp::SessionConfigOptionCategory::Model => {
+                            protocol::SessionConfigOptionCategory::Model => {
                                 content = content
                                     .child(action_tooltip_container(
                                         "Change Model",
@@ -516,7 +521,7 @@ impl Render for ConfigOptionSelector {
                                         KeyBinding::for_action(&CycleFavoriteModels, cx),
                                     ));
                             }
-                            acp::SessionConfigOptionCategory::ThoughtLevel => {
+                            protocol::SessionConfigOptionCategory::ThoughtLevel => {
                                 content = content
                                     .child(action_tooltip_container(
                                         "Change Thinking Effort",
@@ -544,7 +549,7 @@ impl Render for ConfigOptionSelector {
                 .render(window, cx)
                 .into_any_element()
             }
-            acp::SessionConfigKind::Boolean(boolean) => {
+            protocol::SessionConfigKind::Boolean(boolean) => {
                 if !should_render_boolean_config_options(cx) {
                     return div().into_any_element();
                 }
@@ -603,7 +608,7 @@ impl Render for ConfigOptionSelector {
 
                             let task = config_options.set_config_option(
                                 config_id.clone(),
-                                acp::SessionConfigOptionValue::boolean(next_value),
+                                protocol::SessionConfigOptionValue::boolean(next_value),
                                 cx,
                             );
 
@@ -630,7 +635,7 @@ enum ConfigOptionPickerEntry {
 
 #[derive(Clone)]
 struct ConfigOptionValue {
-    value: acp::SessionConfigValueId,
+    value: protocol::SessionConfigValueId,
     name: String,
     description: Option<String>,
     group: Option<String>,
@@ -638,21 +643,21 @@ struct ConfigOptionValue {
 
 struct ConfigOptionPickerDelegate {
     config_options: Rc<dyn AgentSessionConfigOptions>,
-    config_id: acp::SessionConfigId,
+    config_id: protocol::SessionConfigId,
     agent_server: Rc<dyn AgentServer>,
     fs: Arc<dyn Fs>,
     filtered_entries: Vec<ConfigOptionPickerEntry>,
     all_options: Vec<ConfigOptionValue>,
     selected_index: usize,
     selected_description: Option<(usize, SharedString)>,
-    favorites: HashSet<acp::SessionConfigValueId>,
+    favorites: HashSet<protocol::SessionConfigValueId>,
     _settings_subscription: Subscription,
 }
 
 impl ConfigOptionPickerDelegate {
     fn new(
         config_options: Rc<dyn AgentSessionConfigOptions>,
-        config_id: acp::SessionConfigId,
+        config_id: protocol::SessionConfigId,
         agent_server: Rc<dyn AgentServer>,
         fs: Arc<dyn Fs>,
         window: &mut Window,
@@ -700,7 +705,7 @@ impl ConfigOptionPickerDelegate {
         }
     }
 
-    fn current_value(&self) -> Option<acp::SessionConfigValueId> {
+    fn current_value(&self) -> Option<protocol::SessionConfigValueId> {
         get_current_select_value(&self.config_options, &self.config_id)
     }
 }
@@ -792,7 +797,7 @@ impl PickerDelegate for ConfigOptionPickerDelegate {
             );
             let task = self.config_options.set_config_option(
                 self.config_id.clone(),
-                acp::SessionConfigOptionValue::value_id(option.value.clone()),
+                protocol::SessionConfigOptionValue::value_id(option.value.clone()),
                 cx,
             );
 
@@ -925,7 +930,7 @@ impl PickerDelegate for ConfigOptionPickerDelegate {
 
 fn extract_options(
     config_options: &Rc<dyn AgentSessionConfigOptions>,
-    config_id: &acp::SessionConfigId,
+    config_id: &protocol::SessionConfigId,
 ) -> Vec<ConfigOptionValue> {
     let Some(option) = config_options
         .config_options()
@@ -936,8 +941,8 @@ fn extract_options(
     };
 
     match &option.kind {
-        acp::SessionConfigKind::Select(select) => match &select.options {
-            acp::SessionConfigSelectOptions::Ungrouped(options) => options
+        protocol::SessionConfigKind::Select(select) => match &select.options {
+            protocol::SessionConfigSelectOptions::Ungrouped(options) => options
                 .iter()
                 .map(|opt| ConfigOptionValue {
                     value: opt.value.clone(),
@@ -946,7 +951,7 @@ fn extract_options(
                     group: None,
                 })
                 .collect(),
-            acp::SessionConfigSelectOptions::Grouped(groups) => groups
+            protocol::SessionConfigSelectOptions::Grouped(groups) => groups
                 .iter()
                 .flat_map(|group| {
                     group.options.iter().map(|opt| ConfigOptionValue {
@@ -965,26 +970,26 @@ fn extract_options(
 
 fn get_current_select_value(
     config_options: &Rc<dyn AgentSessionConfigOptions>,
-    config_id: &acp::SessionConfigId,
-) -> Option<acp::SessionConfigValueId> {
+    config_id: &protocol::SessionConfigId,
+) -> Option<protocol::SessionConfigValueId> {
     config_options
         .config_options()
         .into_iter()
         .find(|opt| &opt.id == config_id)
         .and_then(|opt| match &opt.kind {
-            acp::SessionConfigKind::Select(select) => Some(select.current_value.clone()),
+            protocol::SessionConfigKind::Select(select) => Some(select.current_value.clone()),
             _ => None,
         })
 }
 
 fn setting_value_for_config_option_value(
-    value: &acp::SessionConfigOptionValue,
+    value: &protocol::SessionConfigOptionValue,
 ) -> Option<AgentConfigOptionValue> {
     match value {
-        acp::SessionConfigOptionValue::ValueId { value } => {
+        protocol::SessionConfigOptionValue::ValueId { value } => {
             Some(AgentConfigOptionValue::ValueId(value.0.to_string()))
         }
-        acp::SessionConfigOptionValue::Boolean { value } => {
+        protocol::SessionConfigOptionValue::Boolean { value } => {
             Some(AgentConfigOptionValue::Boolean(*value))
         }
         _ => None,
@@ -992,12 +997,12 @@ fn setting_value_for_config_option_value(
 }
 
 fn should_render_boolean_config_options(cx: &App) -> bool {
-    cx.has_flag::<AcpBetaFeatureFlag>()
+    cx.has_flag::<ExternalAgentBetaFeatureFlag>()
 }
 
 fn options_to_picker_entries(
     options: &[ConfigOptionValue],
-    favorites: &HashSet<acp::SessionConfigValueId>,
+    favorites: &HashSet<protocol::SessionConfigValueId>,
 ) -> Vec<ConfigOptionPickerEntry> {
     let mut entries = Vec::new();
 
@@ -1074,15 +1079,15 @@ async fn fuzzy_search_options(
 }
 
 fn find_option_name(
-    options: &acp::SessionConfigSelectOptions,
-    value_id: &acp::SessionConfigValueId,
+    options: &protocol::SessionConfigSelectOptions,
+    value_id: &protocol::SessionConfigValueId,
 ) -> Option<String> {
     match options {
-        acp::SessionConfigSelectOptions::Ungrouped(opts) => opts
+        protocol::SessionConfigSelectOptions::Ungrouped(opts) => opts
             .iter()
             .find(|o| &o.value == value_id)
             .map(|o| o.name.clone()),
-        acp::SessionConfigSelectOptions::Grouped(groups) => groups.iter().find_map(|group| {
+        protocol::SessionConfigSelectOptions::Grouped(groups) => groups.iter().find_map(|group| {
             group
                 .options
                 .iter()
@@ -1093,11 +1098,11 @@ fn find_option_name(
     }
 }
 
-fn count_config_options(option: &acp::SessionConfigOption) -> usize {
+fn count_config_options(option: &protocol::SessionConfigOption) -> usize {
     match &option.kind {
-        acp::SessionConfigKind::Select(select) => match &select.options {
-            acp::SessionConfigSelectOptions::Ungrouped(options) => options.len(),
-            acp::SessionConfigSelectOptions::Grouped(groups) => {
+        protocol::SessionConfigKind::Select(select) => match &select.options {
+            protocol::SessionConfigSelectOptions::Ungrouped(options) => options.len(),
+            protocol::SessionConfigSelectOptions::Grouped(groups) => {
                 groups.iter().map(|g| g.options.len()).sum()
             }
             _ => 0,
@@ -1109,7 +1114,7 @@ fn count_config_options(option: &acp::SessionConfigOption) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acp_thread::AgentConnection;
+    use agent_thread::AgentConnection;
     use feature_flags::FeatureFlag as _;
     use fs::FakeFs;
     use gpui::{TestAppContext, UpdateGlobal};
@@ -1121,16 +1126,16 @@ mod tests {
     fn cycling_config_option_saves_selected_value_as_default(cx: &mut TestAppContext) {
         let agent_server = Rc::new(TestAgentServer::default());
         let config_options = Rc::new(TestSessionConfigOptions::new(vec![
-            acp::SessionConfigOption::select(
+            protocol::SessionConfigOption::select(
                 "mode",
                 "Mode",
                 "auto",
                 vec![
-                    acp::SessionConfigSelectOption::new("auto", "Auto"),
-                    acp::SessionConfigSelectOption::new("manual", "Manual"),
+                    protocol::SessionConfigSelectOption::new("auto", "Auto"),
+                    protocol::SessionConfigSelectOption::new("manual", "Manual"),
                 ],
             )
-            .category(acp::SessionConfigOptionCategory::Mode),
+            .category(protocol::SessionConfigOptionCategory::Mode),
         ]));
         let fs: Arc<dyn Fs> = FakeFs::new(cx.executor());
 
@@ -1148,7 +1153,7 @@ mod tests {
             });
 
             assert!(view.update(cx, |view, cx| {
-                view.cycle_category_option(acp::SessionConfigOptionCategory::Mode, false, cx)
+                view.cycle_category_option(protocol::SessionConfigOptionCategory::Mode, false, cx)
             }));
         });
 
@@ -1163,7 +1168,7 @@ mod tests {
             config_options.set_values.borrow().as_slice(),
             &[(
                 "mode".to_string(),
-                acp::SessionConfigOptionValue::value_id("manual")
+                protocol::SessionConfigOptionValue::value_id("manual")
             )]
         );
     }
@@ -1172,14 +1177,14 @@ mod tests {
     fn cycling_boolean_config_option_saves_selected_value_as_default(cx: &mut TestAppContext) {
         let agent_server = Rc::new(TestAgentServer::default());
         let config_options = Rc::new(TestSessionConfigOptions::new(vec![
-            acp::SessionConfigOption::boolean("web_search", "Web Search", false)
-                .category(acp::SessionConfigOptionCategory::ModelConfig),
+            protocol::SessionConfigOption::boolean("web_search", "Web Search", false)
+                .category(protocol::SessionConfigOptionCategory::ModelConfig),
         ]));
         let fs: Arc<dyn Fs> = FakeFs::new(cx.executor());
 
         cx.update(|cx| {
             init_feature_flag_settings(cx);
-            set_feature_flag_override(AcpBetaFeatureFlag::NAME, "on", cx);
+            set_feature_flag_override(ExternalAgentBetaFeatureFlag::NAME, "on", cx);
 
             let config_options: Rc<dyn AgentSessionConfigOptions> = config_options.clone();
             let agent_server: Rc<dyn AgentServer> = agent_server.clone();
@@ -1194,7 +1199,11 @@ mod tests {
             });
 
             assert!(view.update(cx, |view, cx| {
-                view.cycle_category_option(acp::SessionConfigOptionCategory::ModelConfig, false, cx)
+                view.cycle_category_option(
+                    protocol::SessionConfigOptionCategory::ModelConfig,
+                    false,
+                    cx,
+                )
             }));
         });
 
@@ -1209,7 +1218,7 @@ mod tests {
             config_options.set_values.borrow().as_slice(),
             &[(
                 "web_search".to_string(),
-                acp::SessionConfigOptionValue::boolean(true)
+                protocol::SessionConfigOptionValue::boolean(true)
             )]
         );
     }
@@ -1218,14 +1227,14 @@ mod tests {
     fn cycling_hidden_boolean_config_option_is_unhandled(cx: &mut TestAppContext) {
         let agent_server = Rc::new(TestAgentServer::default());
         let config_options = Rc::new(TestSessionConfigOptions::new(vec![
-            acp::SessionConfigOption::boolean("web_search", "Web Search", false)
-                .category(acp::SessionConfigOptionCategory::ModelConfig),
+            protocol::SessionConfigOption::boolean("web_search", "Web Search", false)
+                .category(protocol::SessionConfigOptionCategory::ModelConfig),
         ]));
         let fs: Arc<dyn Fs> = FakeFs::new(cx.executor());
 
         cx.update(|cx| {
             init_feature_flag_settings(cx);
-            set_feature_flag_override(AcpBetaFeatureFlag::NAME, "off", cx);
+            set_feature_flag_override(ExternalAgentBetaFeatureFlag::NAME, "off", cx);
 
             let config_options: Rc<dyn AgentSessionConfigOptions> = config_options.clone();
             let agent_server: Rc<dyn AgentServer> = agent_server.clone();
@@ -1240,7 +1249,11 @@ mod tests {
             });
 
             assert!(!view.update(cx, |view, cx| {
-                view.cycle_category_option(acp::SessionConfigOptionCategory::ModelConfig, false, cx)
+                view.cycle_category_option(
+                    protocol::SessionConfigOptionCategory::ModelConfig,
+                    false,
+                    cx,
+                )
             }));
         });
 
@@ -1252,24 +1265,24 @@ mod tests {
     fn cycling_category_skips_hidden_boolean_config_option(cx: &mut TestAppContext) {
         let agent_server = Rc::new(TestAgentServer::default());
         let config_options = Rc::new(TestSessionConfigOptions::new(vec![
-            acp::SessionConfigOption::boolean("web_search", "Web Search", false)
-                .category(acp::SessionConfigOptionCategory::Model),
-            acp::SessionConfigOption::select(
+            protocol::SessionConfigOption::boolean("web_search", "Web Search", false)
+                .category(protocol::SessionConfigOptionCategory::Model),
+            protocol::SessionConfigOption::select(
                 "model",
                 "Model",
                 "small",
                 vec![
-                    acp::SessionConfigSelectOption::new("small", "Small"),
-                    acp::SessionConfigSelectOption::new("large", "Large"),
+                    protocol::SessionConfigSelectOption::new("small", "Small"),
+                    protocol::SessionConfigSelectOption::new("large", "Large"),
                 ],
             )
-            .category(acp::SessionConfigOptionCategory::Model),
+            .category(protocol::SessionConfigOptionCategory::Model),
         ]));
         let fs: Arc<dyn Fs> = FakeFs::new(cx.executor());
 
         cx.update(|cx| {
             init_feature_flag_settings(cx);
-            set_feature_flag_override(AcpBetaFeatureFlag::NAME, "off", cx);
+            set_feature_flag_override(ExternalAgentBetaFeatureFlag::NAME, "off", cx);
 
             let config_options: Rc<dyn AgentSessionConfigOptions> = config_options.clone();
             let agent_server: Rc<dyn AgentServer> = agent_server.clone();
@@ -1284,7 +1297,7 @@ mod tests {
             });
 
             assert!(view.update(cx, |view, cx| {
-                view.cycle_category_option(acp::SessionConfigOptionCategory::Model, false, cx)
+                view.cycle_category_option(protocol::SessionConfigOptionCategory::Model, false, cx)
             }));
         });
 
@@ -1299,7 +1312,7 @@ mod tests {
             config_options.set_values.borrow().as_slice(),
             &[(
                 "model".to_string(),
-                acp::SessionConfigOptionValue::value_id("large")
+                protocol::SessionConfigOptionValue::value_id("large")
             )]
         );
     }
@@ -1308,8 +1321,8 @@ mod tests {
     fn toggling_category_picker_without_select_config_option_is_unhandled(cx: &mut TestAppContext) {
         let agent_server = Rc::new(TestAgentServer::default());
         let config_options = Rc::new(TestSessionConfigOptions::new(vec![
-            acp::SessionConfigOption::boolean("web_search", "Web Search", false)
-                .category(acp::SessionConfigOptionCategory::Model),
+            protocol::SessionConfigOption::boolean("web_search", "Web Search", false)
+                .category(protocol::SessionConfigOptionCategory::Model),
         ]));
         let fs: Arc<dyn Fs> = FakeFs::new(cx.executor());
         let cx = cx.add_empty_window();
@@ -1323,7 +1336,11 @@ mod tests {
 
         let handled = cx.update(|window, cx| {
             view.update(cx, |view, cx| {
-                view.toggle_category_picker(acp::SessionConfigOptionCategory::Model, window, cx)
+                view.toggle_category_picker(
+                    protocol::SessionConfigOptionCategory::Model,
+                    window,
+                    cx,
+                )
             })
         });
 
@@ -1336,10 +1353,10 @@ mod tests {
             init_feature_flag_settings(cx);
 
             cx.update_flags(false, Vec::new());
-            set_feature_flag_override(AcpBetaFeatureFlag::NAME, "off", cx);
+            set_feature_flag_override(ExternalAgentBetaFeatureFlag::NAME, "off", cx);
             assert!(!should_render_boolean_config_options(cx));
 
-            set_feature_flag_override(AcpBetaFeatureFlag::NAME, "on", cx);
+            set_feature_flag_override(ExternalAgentBetaFeatureFlag::NAME, "on", cx);
             assert!(should_render_boolean_config_options(cx));
         });
     }
@@ -1405,12 +1422,12 @@ mod tests {
     }
 
     struct TestSessionConfigOptions {
-        options: RefCell<Vec<acp::SessionConfigOption>>,
-        set_values: RefCell<Vec<(String, acp::SessionConfigOptionValue)>>,
+        options: RefCell<Vec<protocol::SessionConfigOption>>,
+        set_values: RefCell<Vec<(String, protocol::SessionConfigOptionValue)>>,
     }
 
     impl TestSessionConfigOptions {
-        fn new(options: Vec<acp::SessionConfigOption>) -> Self {
+        fn new(options: Vec<protocol::SessionConfigOption>) -> Self {
             Self {
                 options: RefCell::new(options),
                 set_values: RefCell::new(Vec::new()),
@@ -1419,16 +1436,16 @@ mod tests {
     }
 
     impl AgentSessionConfigOptions for TestSessionConfigOptions {
-        fn config_options(&self) -> Vec<acp::SessionConfigOption> {
+        fn config_options(&self) -> Vec<protocol::SessionConfigOption> {
             self.options.borrow().clone()
         }
 
         fn set_config_option(
             &self,
-            config_id: acp::SessionConfigId,
-            value: acp::SessionConfigOptionValue,
+            config_id: protocol::SessionConfigId,
+            value: protocol::SessionConfigOptionValue,
             _cx: &mut App,
-        ) -> Task<anyhow::Result<Vec<acp::SessionConfigOption>>> {
+        ) -> Task<anyhow::Result<Vec<protocol::SessionConfigOption>>> {
             self.set_values
                 .borrow_mut()
                 .push((config_id.0.to_string(), value.clone()));
@@ -1438,14 +1455,14 @@ mod tests {
                 if let Some(option) = options.iter_mut().find(|option| option.id == config_id) {
                     match (&mut option.kind, value) {
                         (
-                            acp::SessionConfigKind::Select(select),
-                            acp::SessionConfigOptionValue::ValueId { value },
+                            protocol::SessionConfigKind::Select(select),
+                            protocol::SessionConfigOptionValue::ValueId { value },
                         ) => {
                             select.current_value = value;
                         }
                         (
-                            acp::SessionConfigKind::Boolean(boolean),
-                            acp::SessionConfigOptionValue::Boolean { value },
+                            protocol::SessionConfigKind::Boolean(boolean),
+                            protocol::SessionConfigOptionValue::Boolean { value },
                         ) => {
                             boolean.current_value = value;
                         }

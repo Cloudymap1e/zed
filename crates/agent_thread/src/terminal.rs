@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v1 as acp;
+use crate::protocol;
 use anyhow::Result;
 use collections::HashMap;
 use futures::{FutureExt as _, future::Shared};
@@ -23,7 +23,7 @@ use util::get_default_system_shell_preferring_bash;
 
 /// Request to run a terminal command inside an OS-level sandbox.
 ///
-/// Passed to [`super::AcpThread::create_terminal`]. The actual sandboxing
+/// Passed to [`super::AgentThread::create_terminal`]. The actual sandboxing
 /// mechanism is platform-specific (macOS Seatbelt; Linux Bubblewrap; Windows
 /// via Bubblewrap inside WSL), so callers describe the *intent* with plain data
 /// here rather than constructing platform-specific types directly.
@@ -272,14 +272,14 @@ pub(crate) async fn prepare_sandbox_wrap(
 }
 
 pub struct Terminal {
-    id: acp::TerminalId,
+    id: protocol::TerminalId,
     command: Entity<Markdown>,
     working_dir: Option<PathBuf>,
     terminal: Entity<terminal::Terminal>,
     started_at: Instant,
     output: Option<TerminalOutput>,
     output_byte_limit: Option<usize>,
-    _output_task: Shared<Task<acp::TerminalExitStatus>>,
+    _output_task: Shared<Task<protocol::TerminalExitStatus>>,
     /// Flag indicating whether this terminal was stopped by explicit user action
     /// (e.g., clicking the Stop button). This is set before kill() is called
     /// so that code awaiting wait_for_exit() can check it deterministically.
@@ -301,7 +301,7 @@ pub struct TerminalOutput {
 
 impl Terminal {
     pub fn new(
-        id: acp::TerminalId,
+        id: protocol::TerminalId,
         command_label: &str,
         working_dir: Option<PathBuf>,
         output_byte_limit: Option<usize>,
@@ -372,7 +372,7 @@ impl Terminal {
 
                     let exit_status = exit_status.map(portable_pty::ExitStatus::from);
 
-                    acp::TerminalExitStatus::new()
+                    protocol::TerminalExitStatus::new()
                         .exit_code(exit_status.as_ref().map(|e| e.exit_code()))
                         .signal(exit_status.and_then(|e| e.signal().map(ToOwned::to_owned)))
                 })
@@ -380,11 +380,11 @@ impl Terminal {
         }
     }
 
-    pub fn id(&self) -> &acp::TerminalId {
+    pub fn id(&self) -> &protocol::TerminalId {
         &self.id
     }
 
-    pub fn wait_for_exit(&self) -> Shared<Task<acp::TerminalExitStatus>> {
+    pub fn wait_for_exit(&self) -> Shared<Task<protocol::TerminalExitStatus>> {
         self._output_task.clone()
     }
 
@@ -406,23 +406,23 @@ impl Terminal {
         self.user_stopped.load(Ordering::SeqCst)
     }
 
-    pub fn current_output(&self, cx: &App) -> acp::TerminalOutputResponse {
+    pub fn current_output(&self, cx: &App) -> protocol::TerminalOutputResponse {
         if let Some(output) = self.output.as_ref() {
             let exit_status = output.exit_status.map(portable_pty::ExitStatus::from);
 
-            acp::TerminalOutputResponse::new(
+            protocol::TerminalOutputResponse::new(
                 output.content.clone(),
                 output.original_content_len > output.content.len(),
             )
             .exit_status(
-                acp::TerminalExitStatus::new()
+                protocol::TerminalExitStatus::new()
                     .exit_code(exit_status.as_ref().map(|e| e.exit_code()))
                     .signal(exit_status.and_then(|e| e.signal().map(ToOwned::to_owned))),
             )
         } else {
             let (current_content, original_len) = self.truncated_output(cx);
             let truncated = current_content.len() < original_len;
-            acp::TerminalOutputResponse::new(current_content, truncated)
+            protocol::TerminalOutputResponse::new(current_content, truncated)
         }
     }
 

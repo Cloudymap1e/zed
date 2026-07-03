@@ -330,7 +330,7 @@ impl WelcomePage {
         let focus = self.focus_handle.clone();
         let color = cx.theme().colors();
 
-        let description = "Run multiple threads at once, mix and match any ACP-compatible agent, and keep work conflict-free with worktrees.";
+        let description = "Run multiple threads at once, mix and match any External Agent-compatible agent, and keep work conflict-free with worktrees.";
 
         v_flex()
             .w_full()

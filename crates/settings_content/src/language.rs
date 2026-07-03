@@ -1,10 +1,9 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, path::Path, sync::Arc};
 
 use collections::{HashMap, HashSet};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings_macros::{MergeFrom, with_fallible_options};
-use std::sync::Arc;
 
 use crate::{DocumentFoldingRanges, DocumentSymbols, ExtendingVec, SemanticTokens, merge_from};
 
@@ -87,6 +86,8 @@ pub enum EditPredictionProvider {
     Codestral,
     Ollama,
     OpenAiCompatibleApi,
+    Groq,
+    Cerebras,
     Mercury,
 }
 
@@ -99,6 +100,8 @@ impl EditPredictionProvider {
             | EditPredictionProvider::Codestral
             | EditPredictionProvider::Ollama
             | EditPredictionProvider::OpenAiCompatibleApi
+            | EditPredictionProvider::Groq
+            | EditPredictionProvider::Cerebras
             | EditPredictionProvider::Mercury => false,
         }
     }
@@ -112,6 +115,8 @@ impl EditPredictionProvider {
             EditPredictionProvider::None => None,
             EditPredictionProvider::Ollama => Some("Ollama"),
             EditPredictionProvider::OpenAiCompatibleApi => Some("OpenAI-Compatible API"),
+            EditPredictionProvider::Groq => Some("Groq"),
+            EditPredictionProvider::Cerebras => Some("Cerebras"),
         }
     }
 }
@@ -137,6 +142,12 @@ pub struct EditPredictionSettingsContent {
     pub ollama: Option<OllamaEditPredictionSettingsContent>,
     /// Settings specific to using custom OpenAI-compatible servers for edit prediction.
     pub open_ai_compatible_api: Option<CustomEditPredictionProviderSettingsContent>,
+    /// Settings specific to Groq.
+    pub groq: Option<CustomEditPredictionProviderSettingsContent>,
+    /// Settings specific to Cerebras.
+    pub cerebras: Option<CustomEditPredictionProviderSettingsContent>,
+    /// The directory where manually captured edit prediction examples are stored.
+    pub examples_dir: Option<Arc<Path>>,
     /// Controls whether Zed may collect training data when using Zed's Edit Predictions.
     /// Data is only ever captured for files in projects that are detected as open source.
     ///
@@ -152,11 +163,12 @@ pub struct EditPredictionSettingsContent {
 pub struct CustomEditPredictionProviderSettingsContent {
     /// Api URL to use for completions.
     ///
-    /// Default: ""
+    /// Default depends on the provider section. OpenAI-Compatible API defaults to `""`, while
+    /// Groq and Cerebras default to their OpenAI-compatible API endpoints.
     pub api_url: Option<String>,
-    /// The prompt format to use for completions. Set to `""` to have the format be derived from the model name.
+    /// The prompt format to use for completions. Set to `"infer"` to have the format be derived from the model name.
     ///
-    /// Default: ""
+    /// Default: "infer"
     pub prompt_format: Option<EditPredictionPromptFormatContent>,
     /// The name of the model.
     ///
@@ -164,7 +176,7 @@ pub struct CustomEditPredictionProviderSettingsContent {
     pub model: Option<String>,
     /// Maximum tokens to generate.
     ///
-    /// Default: 256
+    /// Default: 64
     pub max_output_tokens: Option<u32>,
 }
 

@@ -10,8 +10,8 @@ use crate::thread_metadata_store::{
 use crate::{Agent, ArchiveSelectedThread, DEFAULT_THREAD_TITLE, RemoveSelectedThread};
 
 use agent::ThreadStore;
-use agent_client_protocol::schema::v1 as acp;
 use agent_settings::AgentSettings;
+use agent_thread::protocol;
 use chrono::{DateTime, Datelike as _, Local, NaiveDate, TimeDelta, Utc};
 use collections::HashMap;
 use editor::Editor;
@@ -808,11 +808,20 @@ impl ThreadsArchiveView {
     fn delete_thread(
         &mut self,
         thread_id: ThreadId,
-        session_id: Option<acp::SessionId>,
+        session_id: Option<protocol::SessionId>,
         agent: AgentId,
         cx: &mut Context<Self>,
     ) {
         ThreadMetadataStore::global(cx).update(cx, |store, cx| store.delete(thread_id, cx));
+
+        if agent.as_ref() == agent::ZED_AGENT_ID.as_ref() {
+            cx.spawn(async move |_this, cx| {
+                crate::thread_worktree_archive::cleanup_thread_archived_worktrees(thread_id, cx)
+                    .await;
+            })
+            .detach();
+            return;
+        }
 
         let agent = Agent::from(agent);
 

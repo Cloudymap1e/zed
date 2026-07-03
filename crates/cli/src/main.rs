@@ -1260,11 +1260,13 @@ mod mac_os {
     use core_foundation::{
         array::{CFArray, CFIndex},
         base::TCFType as _,
-        string::kCFStringEncodingUTF8,
+        error::{CFError, CFErrorRef},
+        string::{CFString, kCFStringEncodingUTF8},
         url::{CFURL, CFURLCreateWithBytes},
     };
     use core_services::{
-        LSLaunchURLSpec, LSOpenFromURLSpec, kLSLaunchDefaults, kLSLaunchDontSwitch,
+        LSCopyApplicationURLsForBundleIdentifier, LSLaunchURLSpec, LSOpenFromURLSpec,
+        kLSLaunchDefaults, kLSLaunchDontSwitch,
     };
     use serde::Deserialize;
     use std::{
@@ -1455,25 +1457,77 @@ mod mac_os {
         channel: release_channel::ReleaseChannel,
         leftover_args: Vec<String>,
     ) -> Result<()> {
-        use anyhow::bail;
-
-        let app_path_prompt = format!(
-            "POSIX path of (path to application \"{}\")",
-            channel.display_name()
-        );
-        let app_path_output = Command::new("osascript")
-            .arg("-e")
-            .arg(&app_path_prompt)
-            .output()?;
-        if !app_path_output.status.success() {
-            bail!(
-                "Could not determine app path for {}",
-                channel.display_name()
-            );
-        }
-        let app_path = String::from_utf8(app_path_output.stdout)?.trim().to_owned();
-        let cli_path = format!("{app_path}/Contents/MacOS/cli");
+        let app_path = find_app_for_channel(channel)?;
+        let cli_path = app_path.join("Contents/MacOS/cli");
         Command::new(cli_path).args(leftover_args).spawn()?;
         Ok(())
+    }
+
+    fn find_app_for_channel(channel: release_channel::ReleaseChannel) -> Result<PathBuf> {
+        let bundle_identifier = CFString::new(channel.app_id());
+        let mut error: CFErrorRef = ptr::null_mut();
+        let app_urls = unsafe {
+            LSCopyApplicationURLsForBundleIdentifier(
+                bundle_identifier.as_concrete_TypeRef(),
+                &mut error,
+            )
+        };
+
+        if app_urls.is_null() {
+            let error_description = if error.is_null() {
+                None
+            } else {
+                Some(unsafe {
+                    CFError::wrap_under_create_rule(error)
+                        .description()
+                        .to_string()
+                })
+            };
+            anyhow::bail!(
+                "Could not determine app path for {}{}",
+                channel.display_name(),
+                error_description
+                    .as_deref()
+                    .map(|error| format!(": {error}"))
+                    .unwrap_or_default()
+            );
+        }
+
+        let app_urls = unsafe { CFArray::<CFURL>::wrap_under_create_rule(app_urls) };
+        preferred_app_path(channel, &app_urls).with_context(|| {
+            format!(
+                "Launch Services returned no app paths for {}",
+                channel.display_name()
+            )
+        })
+    }
+
+    fn preferred_app_path(
+        channel: release_channel::ReleaseChannel,
+        app_urls: &CFArray<CFURL>,
+    ) -> Option<PathBuf> {
+        let expected_app_name = format!("{}.app", channel.display_name());
+        let expected_app_path = Path::new("/Applications").join(&expected_app_name);
+        let mut first_path = None;
+
+        for index in 0..app_urls.len() {
+            let Some(app_url) = app_urls.get(index) else {
+                continue;
+            };
+            let Some(path) = app_url.to_path() else {
+                continue;
+            };
+
+            if path == expected_app_path
+                || path.starts_with("/Applications")
+                    && path.file_name() == Some(OsStr::new(&expected_app_name))
+            {
+                return Some(path);
+            }
+
+            first_path.get_or_insert(path);
+        }
+
+        first_path
     }
 }

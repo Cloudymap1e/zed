@@ -11,7 +11,7 @@
 //! [`UserAgentsMdState::Error`] and forwarded to the notifier.
 //!
 //! The file is read in full, mirroring how project rules / repo `AGENTS.md`
-//! files are loaded by the native agent today.
+//! files are loaded into agent instructions today.
 
 use std::sync::Arc;
 

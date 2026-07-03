@@ -1,10 +1,10 @@
 mod thread_switcher;
 
-use acp_thread::ThreadStatus;
 use action_log::DiffStats;
 use agent::{ThreadStore, ZED_AGENT_ID};
-use agent_client_protocol::schema::v1 as acp;
 use agent_settings::AgentSettings;
+use agent_thread::ThreadStatus;
+use agent_thread::protocol;
 use agent_ui::terminal_thread_metadata_store::{
     TerminalThreadMetadata, TerminalThreadMetadataStore, terminal_title_prefix,
 };
@@ -16,10 +16,10 @@ use agent_ui::threads_archive_view::{
     fuzzy_match_positions,
 };
 use agent_ui::{
-    AcpThreadImportOnboarding, Agent, AgentPanel, AgentPanelEvent, AgentThreadSource,
+    Agent, AgentPanel, AgentPanelEvent, AgentThreadImportOnboarding, AgentThreadSource,
     ArchiveSelectedThread, CrossChannelImportOnboarding, DEFAULT_THREAD_TITLE, NewTerminalThread,
     NewThread, RenameSelectedThread, TerminalId, ThreadId, ThreadImportModal,
-    ThreadTitleRegenerationResult, channels_with_threads, import_threads_from_other_channels,
+    channels_with_threads, import_threads_from_other_channels,
 };
 use agent_ui::{MessageEditorEvent, StateChange, thread_worktree_archive};
 use chrono::{DateTime, Utc};
@@ -34,7 +34,6 @@ use gpui::{
     linear_gradient, list, prelude::*, px,
 };
 use itertools::Itertools;
-use language_model::LanguageModelRegistry;
 use menu::{
     Cancel, Confirm, SelectChild, SelectFirst, SelectLast, SelectNext, SelectParent, SelectPrevious,
 };
@@ -146,7 +145,7 @@ enum ActiveEntry {
         /// Stable remote identifier, used for matching when thread_id
         /// differs (e.g. after cross-window activation creates a new
         /// local ThreadId).
-        session_id: Option<acp::SessionId>,
+        session_id: Option<protocol::SessionId>,
         workspace: Entity<Workspace>,
     },
     Terminal {
@@ -198,7 +197,7 @@ impl ActiveEntry {
 
 #[derive(Clone, Debug)]
 struct ActiveThreadInfo {
-    session_id: acp::SessionId,
+    session_id: protocol::SessionId,
     title: SharedString,
     status: AgentThreadStatus,
     icon: IconName,
@@ -466,7 +465,7 @@ impl ActivatableEntry {
 
 #[cfg(test)]
 impl ListEntry {
-    fn session_id(&self) -> Option<&acp::SessionId> {
+    fn session_id(&self) -> Option<&protocol::SessionId> {
         match self {
             ListEntry::Thread(thread_entry) => thread_entry.metadata.session_id.as_ref(),
             ListEntry::Terminal(_) | ListEntry::ProjectHeader { .. } => None,
@@ -799,7 +798,7 @@ pub struct Sidebar {
     /// Persists live thread statuses across rebuilds so that Running→Completed
     /// transitions can be detected even when the group is collapsed (and
     /// thread entries are not present in the list).
-    live_thread_statuses: HashMap<acp::SessionId, (AgentThreadStatus, ThreadId)>,
+    live_thread_statuses: HashMap<protocol::SessionId, (AgentThreadStatus, ThreadId)>,
     /// Remembers whether each draft last rendered as empty or with content so
     /// that when a draft that was empty gains content again, we refresh
     /// its interaction time.
@@ -1394,9 +1393,9 @@ impl Sidebar {
         let mut entries = Vec::new();
         let mut notified_threads = previous.notified_threads;
         let mut notified_terminals: HashSet<TerminalId> = HashSet::new();
-        let mut new_live_statuses: HashMap<acp::SessionId, (AgentThreadStatus, ThreadId)> =
+        let mut new_live_statuses: HashMap<protocol::SessionId, (AgentThreadStatus, ThreadId)> =
             HashMap::new();
-        let mut current_session_ids: HashSet<acp::SessionId> = HashSet::new();
+        let mut current_session_ids: HashSet<protocol::SessionId> = HashSet::new();
         let mut current_thread_ids: HashSet<agent_ui::ThreadId> = HashSet::new();
         let mut current_terminal_ids: HashSet<TerminalId> = HashSet::new();
         let mut project_header_indices: Vec<usize> = Vec::new();
@@ -1409,11 +1408,15 @@ impl Sidebar {
 
         let resolve_agent_icon = |agent_id: &AgentId| -> (IconName, Option<SharedString>) {
             let agent = Agent::from(agent_id.clone());
-            let icon = match agent {
-                Agent::NativeAgent => IconName::ZedAgent,
-                Agent::Custom { .. } => IconName::Terminal,
-
-                _ => IconName::ZedAgent,
+            let icon = if agent.is_native() {
+                IconName::ZedAgent
+            } else {
+                match agent {
+                    Agent::Custom { .. } => IconName::Terminal,
+                    #[cfg(any(test, feature = "test-support"))]
+                    Agent::Stub => IconName::ZedAgent,
+                    _ => IconName::ZedAgent,
+                }
             };
             let icon_from_external_svg = agent_server_store
                 .as_ref()
@@ -1737,7 +1740,7 @@ impl Sidebar {
 
                 // Build a lookup from live_infos and compute running/waiting
                 // counts in a single pass.
-                let mut live_info_by_session: HashMap<acp::SessionId, ActiveThreadInfo> =
+                let mut live_info_by_session: HashMap<protocol::SessionId, ActiveThreadInfo> =
                     HashMap::new();
                 for info in live_infos {
                     if info.status == AgentThreadStatus::Running {
@@ -3626,6 +3629,17 @@ impl Sidebar {
         })
     }
 
+    fn is_removed_zed_agent_thread(metadata: &ThreadMetadata) -> bool {
+        metadata.agent_id.as_ref() == ZED_AGENT_ID.as_ref()
+    }
+
+    fn log_removed_zed_agent_thread(metadata: &ThreadMetadata) {
+        log::warn!(
+            "cannot open legacy Zed Agent thread {:?}: Zed Agent has been removed",
+            metadata.thread_id
+        );
+    }
+
     fn load_agent_thread_in_workspace(
         workspace: &Entity<Workspace>,
         metadata: &ThreadMetadata,
@@ -3633,6 +3647,11 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut App,
     ) {
+        if Self::is_removed_zed_agent_thread(metadata) {
+            Self::log_removed_zed_agent_thread(metadata);
+            return;
+        }
+
         let load_thread = |agent_panel: Entity<AgentPanel>,
                            metadata: &ThreadMetadata,
                            focus: bool,
@@ -3696,7 +3715,7 @@ impl Sidebar {
     }
 
     fn open_closed_native_thread_as_markdown(
-        session_id: &acp::SessionId,
+        session_id: &protocol::SessionId,
         title: Option<SharedString>,
         workspace: &Entity<Workspace>,
         window: &mut Window,
@@ -3749,115 +3768,20 @@ impl Sidebar {
         });
     }
 
-    fn show_no_thread_summary_model_toast(workspace: Entity<Workspace>, cx: &mut App) {
-        Self::show_thread_title_toast(
-            workspace,
-            "No model is configured for summarizing thread titles.",
-            cx,
-        );
-    }
-
     fn regenerate_thread_title(
         &mut self,
-        session_id: &acp::SessionId,
+        _session_id: &protocol::SessionId,
         thread_id: ThreadId,
-        folder_paths: PathList,
-        thread_workspace: Option<Entity<Workspace>>,
+        _folder_paths: PathList,
+        _thread_workspace: Option<Entity<Workspace>>,
         cx: &mut Context<Self>,
     ) {
-        if let Some(panel) = thread_workspace
-            .as_ref()
-            .and_then(|w| w.read(cx).panel::<AgentPanel>(cx))
-        {
-            match panel.update(cx, |panel, cx| panel.regenerate_thread_title(thread_id, cx)) {
-                ThreadTitleRegenerationResult::Started
-                | ThreadTitleRegenerationResult::AlreadyGenerating => return,
-                ThreadTitleRegenerationResult::NoModel => {
-                    if let Some(workspace) = self.active_workspace(cx) {
-                        Self::show_no_thread_summary_model_toast(workspace, cx);
-                    }
-                    return;
-                }
-                ThreadTitleRegenerationResult::NotOpen => {}
-            }
+        log::warn!(
+            "cannot regenerate title for legacy Zed Agent thread {thread_id:?}: Zed Agent has been removed"
+        );
+        if let Some(workspace) = self.active_workspace(cx) {
+            Self::show_thread_title_toast(workspace, "Zed Agent has been removed.", cx);
         }
-
-        let Some(configured_model) =
-            LanguageModelRegistry::read_global(cx).thread_summary_model(cx)
-        else {
-            if let Some(workspace) = self.active_workspace(cx) {
-                Self::show_no_thread_summary_model_toast(workspace, cx);
-            }
-            return;
-        };
-
-        if !self.regenerating_titles.insert(thread_id) {
-            return;
-        }
-
-        let model = configured_model.model;
-        let temperature = AgentSettings::temperature_for_model(&model, cx);
-
-        let thread_store = ThreadStore::global(cx);
-        let load_task =
-            thread_store.update(cx, |store, cx| store.load_thread(session_id.clone(), cx));
-        let session_id = session_id.clone();
-
-        cx.notify();
-
-        cx.spawn(async move |this, cx| {
-            let result: anyhow::Result<SharedString> = async {
-                let Some(db_thread) = load_task.await? else {
-                    anyhow::bail!("Thread not found in database");
-                };
-
-                let request = agent::build_thread_title_request(&db_thread.messages, temperature);
-                let title =
-                    SharedString::from(agent::stream_thread_title(model, request, cx).await?);
-
-                let Some(mut db_thread) = thread_store
-                    .update(cx, |store, cx| store.load_thread(session_id.clone(), cx))
-                    .await?
-                else {
-                    anyhow::bail!("Thread not found in database");
-                };
-                db_thread.title = title.clone();
-
-                thread_store
-                    .update(cx, |store, cx| {
-                        store.save_thread(session_id, db_thread, folder_paths, cx)
-                    })
-                    .await?;
-
-                anyhow::Ok(title)
-            }
-            .await;
-
-            this.update(cx, |this, cx| {
-                this.regenerating_titles.remove(&thread_id);
-                match &result {
-                    Ok(title) => {
-                        ThreadMetadataStore::global(cx).update(cx, |store, cx| {
-                            store.set_generated_title(thread_id, title.clone(), cx);
-                        });
-                    }
-                    Err(_) => {
-                        if let Some(workspace) = this.active_workspace(cx) {
-                            Self::show_thread_title_toast(
-                                workspace,
-                                "Failed to regenerate thread title.",
-                                cx,
-                            );
-                        }
-                    }
-                }
-                cx.notify();
-            })
-            .ok();
-
-            result.map(|_| ())
-        })
-        .detach_and_log_err(cx);
     }
 
     fn is_thread_active_in_workspace(
@@ -3880,6 +3804,11 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if Self::is_removed_zed_agent_thread(metadata) {
+            Self::log_removed_zed_agent_thread(metadata);
+            return;
+        }
+
         let Some(multi_workspace) = self.multi_workspace.upgrade() else {
             return;
         };
@@ -3990,6 +3919,11 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if Self::is_removed_zed_agent_thread(&metadata) {
+            Self::log_removed_zed_agent_thread(&metadata);
+            return;
+        }
+
         let Some(multi_workspace) = self.multi_workspace.upgrade() else {
             return;
         };
@@ -4947,7 +4881,7 @@ impl Sidebar {
 
     fn open_workspace_and_archive_thread(
         &mut self,
-        session_id: acp::SessionId,
+        session_id: protocol::SessionId,
         folder_paths: PathList,
         project_group_key: ProjectGroupKey,
         window: &mut Window,
@@ -5326,7 +5260,7 @@ impl Sidebar {
 
     fn archive_thread(
         &mut self,
-        session_id: &acp::SessionId,
+        session_id: &protocol::SessionId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -5603,7 +5537,7 @@ impl Sidebar {
     /// initiated unarchive can cancel the task.
     fn archive_and_activate(
         &mut self,
-        _session_id: &acp::SessionId,
+        _session_id: &protocol::SessionId,
         thread_id: Option<agent_ui::ThreadId>,
         neighbor: Option<&ActivatableEntry>,
         thread_folder_paths: Option<&PathList>,
@@ -5876,7 +5810,7 @@ impl Sidebar {
         entries: &mut Vec<ListEntry>,
         terminals: Vec<TerminalEntry>,
         threads: Vec<Arc<ThreadEntry>>,
-        current_session_ids: &mut HashSet<acp::SessionId>,
+        current_session_ids: &mut HashSet<protocol::SessionId>,
         current_thread_ids: &mut HashSet<agent_ui::ThreadId>,
     ) {
         fn display_time(entry: &ListEntry) -> DateTime<Utc> {
@@ -7702,7 +7636,7 @@ impl Sidebar {
         });
     }
 
-    fn should_render_acp_import_onboarding(&self, cx: &App) -> bool {
+    fn should_render_external_agent_import_onboarding(&self, cx: &App) -> bool {
         let has_external_agents = self
             .active_workspace(cx)
             .map(|ws| {
@@ -7715,10 +7649,10 @@ impl Sidebar {
             })
             .unwrap_or(false);
 
-        has_external_agents && !AcpThreadImportOnboarding::dismissed(cx)
+        has_external_agents && !AgentThreadImportOnboarding::dismissed(cx)
     }
 
-    fn render_acp_import_onboarding(
+    fn render_external_agent_import_onboarding(
         &mut self,
         verbose_labels: bool,
         cx: &mut Context<Self>,
@@ -7728,7 +7662,7 @@ impl Sidebar {
             this.show_thread_import_modal("external_agent_onboarding", window, cx);
         });
         render_import_onboarding_banner(
-            "acp",
+            "external agent",
             "Looking for threads from external agents?",
             "Import threads from agents like Claude Agent, Codex, and more, whether started in Zed or another client.",
             if verbose_labels {
@@ -7736,7 +7670,7 @@ impl Sidebar {
             } else {
                 "Import Threads"
             },
-            |_, _window, cx| AcpThreadImportOnboarding::dismiss(cx),
+            |_, _window, cx| AgentThreadImportOnboarding::dismiss(cx),
             on_import,
             cx,
         )
@@ -8118,15 +8052,16 @@ impl Render for Sidebar {
                 SidebarView::Archive(archive_view) => this.child(archive_view.clone()),
             })
             .map(|this| {
-                let show_acp = self.should_render_acp_import_onboarding(cx);
+                let show_external_agent_import =
+                    self.should_render_external_agent_import_onboarding(cx);
                 let show_cross_channel = self.should_render_cross_channel_import_onboarding(cx);
 
                 let verbose = *self
                     .import_banners_use_verbose_labels
-                    .get_or_insert(show_acp && show_cross_channel);
+                    .get_or_insert(show_external_agent_import && show_cross_channel);
 
-                this.when(show_acp, |this| {
-                    this.child(self.render_acp_import_onboarding(verbose, cx))
+                this.when(show_external_agent_import, |this| {
+                    this.child(self.render_external_agent_import_onboarding(verbose, cx))
                 })
                 .when(show_cross_channel, |this| {
                     this.child(self.render_cross_channel_import_onboarding(verbose, cx))
@@ -8161,9 +8096,7 @@ fn all_thread_infos_for_workspace(
             let title = thread
                 .title()
                 .unwrap_or_else(|| DEFAULT_THREAD_TITLE.into());
-            let is_title_generating = thread_view_ref
-                .as_native_thread(cx)
-                .is_some_and(|native_thread| native_thread.read(cx).is_generating_title());
+            let is_title_generating = false;
             let session_id = thread.session_id().clone();
             let is_background = agent_panel.is_retained_thread(&conversation_thread_id);
 

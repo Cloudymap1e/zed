@@ -1,5 +1,5 @@
-use acp_thread::{Elicitation, ElicitationEntryId, ElicitationStatus};
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::protocol;
+use agent_thread::{Elicitation, ElicitationEntryId, ElicitationStatus};
 use collections::{HashMap, HashSet};
 use component::{Component, ComponentScope, example_group_with_title, single_example};
 use editor::Editor;
@@ -31,14 +31,18 @@ pub(crate) struct ElicitationFormState {
 }
 
 impl ElicitationFormState {
-    pub(crate) fn new(schema: &acp::ElicitationSchema, window: &mut Window, cx: &mut App) -> Self {
+    pub(crate) fn new(
+        schema: &protocol::ElicitationSchema,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self {
         let required = schema.required.as_deref().unwrap_or_default();
         let mut fields = HashMap::default();
 
         for (name, property) in &schema.properties {
             let is_required = required.iter().any(|required| required == name);
             let field = match property {
-                acp::ElicitationPropertySchema::String(schema) => {
+                protocol::ElicitationPropertySchema::String(schema) => {
                     let options = single_select_options(schema);
                     if options.is_empty() {
                         let editor = cx.new(|cx| {
@@ -58,7 +62,7 @@ impl ElicitationFormState {
                         ElicitationFieldState::SingleSelect { value }
                     }
                 }
-                acp::ElicitationPropertySchema::Number(schema) => {
+                protocol::ElicitationPropertySchema::Number(schema) => {
                     let editor = cx.new(|cx| {
                         let mut editor = Editor::single_line(window, cx);
                         if let Some(default) = schema.default {
@@ -68,7 +72,7 @@ impl ElicitationFormState {
                     });
                     ElicitationFieldState::Text(editor)
                 }
-                acp::ElicitationPropertySchema::Integer(schema) => {
+                protocol::ElicitationPropertySchema::Integer(schema) => {
                     let editor = cx.new(|cx| {
                         let mut editor = Editor::single_line(window, cx);
                         if let Some(default) = schema.default {
@@ -78,10 +82,10 @@ impl ElicitationFormState {
                     });
                     ElicitationFieldState::Text(editor)
                 }
-                acp::ElicitationPropertySchema::Boolean(schema) => {
+                protocol::ElicitationPropertySchema::Boolean(schema) => {
                     ElicitationFieldState::Boolean(schema.default.unwrap_or(false))
                 }
-                acp::ElicitationPropertySchema::Array(schema) => {
+                protocol::ElicitationPropertySchema::Array(schema) => {
                     ElicitationFieldState::MultiSelect(
                         schema
                             .default
@@ -104,9 +108,10 @@ impl ElicitationFormState {
 
     pub(crate) fn collect(
         &self,
-        schema: &acp::ElicitationSchema,
+        schema: &protocol::ElicitationSchema,
         cx: &App,
-    ) -> Result<BTreeMap<String, acp::ElicitationContentValue>, HashMap<String, SharedString>> {
+    ) -> Result<BTreeMap<String, protocol::ElicitationContentValue>, HashMap<String, SharedString>>
+    {
         let required = schema.required.as_deref().unwrap_or_default();
         let mut content = BTreeMap::new();
         let mut errors = HashMap::default();
@@ -119,7 +124,7 @@ impl ElicitationFormState {
 
             let field_content = match (property, field) {
                 (
-                    acp::ElicitationPropertySchema::String(schema),
+                    protocol::ElicitationPropertySchema::String(schema),
                     ElicitationFieldState::Text(editor),
                 ) => {
                     let value = editor.read(cx).text(cx).to_string();
@@ -135,7 +140,7 @@ impl ElicitationFormState {
                     }
                 }
                 (
-                    acp::ElicitationPropertySchema::String(schema),
+                    protocol::ElicitationPropertySchema::String(schema),
                     ElicitationFieldState::SingleSelect { value },
                 ) => {
                     if let Some(value) = value {
@@ -151,7 +156,7 @@ impl ElicitationFormState {
                     }
                 }
                 (
-                    acp::ElicitationPropertySchema::Number(schema),
+                    protocol::ElicitationPropertySchema::Number(schema),
                     ElicitationFieldState::Text(editor),
                 ) => {
                     let value = editor.read(cx).text(cx).trim().to_string();
@@ -167,7 +172,7 @@ impl ElicitationFormState {
                     }
                 }
                 (
-                    acp::ElicitationPropertySchema::Integer(schema),
+                    protocol::ElicitationPropertySchema::Integer(schema),
                     ElicitationFieldState::Text(editor),
                 ) => {
                     let value = editor.read(cx).text(cx).trim().to_string();
@@ -183,7 +188,7 @@ impl ElicitationFormState {
                     }
                 }
                 (
-                    acp::ElicitationPropertySchema::Boolean(schema),
+                    protocol::ElicitationPropertySchema::Boolean(schema),
                     ElicitationFieldState::Boolean(value),
                 ) => {
                     if is_required || *value || schema.default.is_some() {
@@ -193,7 +198,7 @@ impl ElicitationFormState {
                     }
                 }
                 (
-                    acp::ElicitationPropertySchema::Array(schema),
+                    protocol::ElicitationPropertySchema::Array(schema),
                     ElicitationFieldState::MultiSelect(selected),
                 ) => {
                     let mut values = multi_select_options(schema)
@@ -293,7 +298,7 @@ mod tests {
 
     #[test]
     fn string_validation_rejects_email_format_mismatch() {
-        let schema = acp::StringPropertySchema::email();
+        let schema = protocol::StringPropertySchema::email();
 
         validate_string_value("Email".into(), &schema, "user@example.com")
             .expect("valid email should be accepted");
@@ -307,7 +312,7 @@ mod tests {
 
     #[test]
     fn string_validation_rejects_pattern_mismatch() {
-        let schema = acp::StringPropertySchema::new().pattern("^prod-[0-9]+$");
+        let schema = protocol::StringPropertySchema::new().pattern("^prod-[0-9]+$");
 
         validate_string_value("Environment".into(), &schema, "prod-42")
             .expect("matching pattern should be accepted");
@@ -321,7 +326,7 @@ mod tests {
 
     #[test]
     fn number_validation_rejects_non_finite_values() {
-        let schema = acp::NumberPropertySchema::new();
+        let schema = protocol::NumberPropertySchema::new();
 
         assert_eq!(
             validate_number_value("Amount".into(), &schema, "42.5")
@@ -343,10 +348,10 @@ mod tests {
     fn should_render_pending_and_accepted_url_elicitations() {
         let pending = Elicitation {
             id: ElicitationEntryId("pending".into()),
-            request: acp::CreateElicitationRequest::new(
-                acp::ElicitationFormMode::new(
+            request: protocol::CreateElicitationRequest::new(
+                protocol::ElicitationFormMode::new(
                     preview_request_scope(0),
-                    acp::ElicitationSchema::new(),
+                    protocol::ElicitationSchema::new(),
                 ),
                 "Review this request.",
             ),
@@ -356,10 +361,10 @@ mod tests {
 
         let accepted_url = Elicitation {
             id: ElicitationEntryId("accepted-url".into()),
-            request: acp::CreateElicitationRequest::new(
-                acp::ElicitationUrlMode::new(
+            request: protocol::CreateElicitationRequest::new(
+                protocol::ElicitationUrlMode::new(
                     preview_request_scope(1),
-                    acp::ElicitationId::new("accepted-url"),
+                    protocol::ElicitationId::new("accepted-url"),
                     "https://auth.example.com/device",
                 ),
                 "Authorize Zed in your browser.",
@@ -370,10 +375,10 @@ mod tests {
 
         let accepted_form = Elicitation {
             id: ElicitationEntryId("accepted-form".into()),
-            request: acp::CreateElicitationRequest::new(
-                acp::ElicitationFormMode::new(
+            request: protocol::CreateElicitationRequest::new(
+                protocol::ElicitationFormMode::new(
                     preview_request_scope(2),
-                    acp::ElicitationSchema::new(),
+                    protocol::ElicitationSchema::new(),
                 ),
                 "Review this request.",
             ),
@@ -434,9 +439,9 @@ mod tests {
         crate::conversation_view::tests::init_test(cx);
 
         cx.add_window(|window, cx| {
-            let schema = acp::ElicitationSchema::new().property(
+            let schema = protocol::ElicitationSchema::new().property(
                 "token",
-                acp::StringPropertySchema::new()
+                protocol::StringPropertySchema::new()
                     .title("Token")
                     .default_value("  secret  "),
                 true,
@@ -448,7 +453,7 @@ mod tests {
 
             assert_eq!(
                 content.get("token"),
-                Some(&acp::ElicitationContentValue::String(
+                Some(&protocol::ElicitationContentValue::String(
                     "  secret  ".to_string()
                 ))
             );
@@ -462,9 +467,9 @@ mod tests {
         crate::conversation_view::tests::init_test(cx);
 
         cx.add_window(|window, cx| {
-            let schema = acp::ElicitationSchema::new().property(
+            let schema = protocol::ElicitationSchema::new().property(
                 "environment",
-                acp::StringPropertySchema::new()
+                protocol::StringPropertySchema::new()
                     .title("Environment")
                     .enum_values(vec!["production".to_string(), "staging".to_string()])
                     .default_value("development"),
@@ -486,9 +491,9 @@ mod tests {
         crate::conversation_view::tests::init_test(cx);
 
         cx.add_window(|window, cx| {
-            let schema = acp::ElicitationSchema::new().property(
+            let schema = protocol::ElicitationSchema::new().property(
                 "environment",
-                acp::StringPropertySchema::new()
+                protocol::StringPropertySchema::new()
                     .title("Environment")
                     .enum_values(vec!["production".to_string(), "staging".to_string()])
                     .default_value("development"),
@@ -501,7 +506,7 @@ mod tests {
 
             assert_eq!(
                 content.get("environment"),
-                Some(&acp::ElicitationContentValue::String(
+                Some(&protocol::ElicitationContentValue::String(
                     "production".to_string()
                 ))
             );
@@ -515,9 +520,9 @@ mod tests {
         crate::conversation_view::tests::init_test(cx);
 
         cx.add_window(|window, cx| {
-            let schema = acp::ElicitationSchema::new().property(
+            let schema = protocol::ElicitationSchema::new().property(
                 "environment",
-                acp::StringPropertySchema::new()
+                protocol::StringPropertySchema::new()
                     .title("Environment")
                     .enum_values(vec!["production".to_string(), "staging".to_string()]),
                 false,
@@ -545,16 +550,18 @@ mod tests {
         crate::conversation_view::tests::init_test(cx);
 
         cx.add_window(|window, cx| {
-            let schema = acp::ElicitationSchema::new()
+            let schema = protocol::ElicitationSchema::new()
                 .string("account", true)
                 .property(
                     "age",
-                    acp::IntegerPropertySchema::new().title("Age").minimum(18),
+                    protocol::IntegerPropertySchema::new()
+                        .title("Age")
+                        .minimum(18),
                     true,
                 )
                 .property(
                     "environment",
-                    acp::StringPropertySchema::new()
+                    protocol::StringPropertySchema::new()
                         .title("Environment")
                         .enum_values(vec!["production".to_string(), "staging".to_string()]),
                     false,
@@ -604,7 +611,7 @@ impl Component for ElicitationCardPreview {
     }
 
     fn description() -> &'static str {
-        "ACP elicitation request cards as rendered in the agent panel."
+        "External Agent elicitation request cards as rendered in the agent panel."
     }
 
     fn preview(window: &mut Window, cx: &mut App) -> AnyElement {
@@ -679,12 +686,12 @@ fn render_form_preview(
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
-    let request = acp::CreateElicitationRequest::new(
-        acp::ElicitationFormMode::new(preview_request_scope(entry_ix), preview_form_schema()),
+    let request = protocol::CreateElicitationRequest::new(
+        protocol::ElicitationFormMode::new(preview_request_scope(entry_ix), preview_form_schema()),
         "Choose how Zed should connect to this account.",
     );
     let mut form_state = matches!(status, ElicitationStatus::Pending { .. }).then(|| {
-        let acp::ElicitationMode::Form(mode) = &request.mode else {
+        let protocol::ElicitationMode::Form(mode) = &request.mode else {
             unreachable!();
         };
         ElicitationFormState::new(&mode.requested_schema, window, cx)
@@ -708,10 +715,10 @@ fn render_url_preview(
     _window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
-    let request = acp::CreateElicitationRequest::new(
-        acp::ElicitationUrlMode::new(
+    let request = protocol::CreateElicitationRequest::new(
+        protocol::ElicitationUrlMode::new(
             preview_request_scope(entry_ix),
-            acp::ElicitationId::new(format!("preview-url-{entry_ix}")),
+            protocol::ElicitationId::new(format!("preview-url-{entry_ix}")),
             preview_url(),
         ),
         "Authorize Zed in your browser to finish signing in.",
@@ -722,7 +729,7 @@ fn render_url_preview(
 
 fn render_preview_card(
     entry_ix: usize,
-    request: acp::CreateElicitationRequest,
+    request: protocol::CreateElicitationRequest,
     status: ElicitationStatus,
     form_state: Option<&ElicitationFormState>,
     cx: &App,
@@ -753,15 +760,15 @@ fn pending_status() -> ElicitationStatus {
     ElicitationStatus::Pending { respond_tx }
 }
 
-fn preview_request_scope(index: usize) -> acp::ElicitationRequestScope {
-    acp::ElicitationRequestScope::new(acp::RequestId::Number(index as i64))
+fn preview_request_scope(index: usize) -> protocol::ElicitationRequestScope {
+    protocol::ElicitationRequestScope::new(protocol::RequestId::Number(index as i64))
 }
 
-fn preview_form_schema() -> acp::ElicitationSchema {
-    acp::ElicitationSchema::new()
+fn preview_form_schema() -> protocol::ElicitationSchema {
+    protocol::ElicitationSchema::new()
         .property(
             "account_name",
-            acp::StringPropertySchema::new()
+            protocol::StringPropertySchema::new()
                 .title("Account Name")
                 .description("Used to label this connection in the agent panel.")
                 .default_value("Work"),
@@ -769,23 +776,23 @@ fn preview_form_schema() -> acp::ElicitationSchema {
         )
         .property(
             "environment",
-            acp::StringPropertySchema::new()
+            protocol::StringPropertySchema::new()
                 .title("Environment")
                 .description("Select the environment this credential should target.")
                 .one_of(vec![
-                    acp::EnumOption::new("production", "Production"),
-                    acp::EnumOption::new("staging", "Staging"),
-                    acp::EnumOption::new("development", "Development"),
+                    protocol::EnumOption::new("production", "Production"),
+                    protocol::EnumOption::new("staging", "Staging"),
+                    protocol::EnumOption::new("development", "Development"),
                 ])
                 .default_value("staging"),
             true,
         )
         .property(
             "scopes",
-            acp::MultiSelectPropertySchema::titled(vec![
-                acp::EnumOption::new("profile", "Profile"),
-                acp::EnumOption::new("repository", "Repository Access"),
-                acp::EnumOption::new("terminal", "Terminal Commands"),
+            protocol::MultiSelectPropertySchema::titled(vec![
+                protocol::EnumOption::new("profile", "Profile"),
+                protocol::EnumOption::new("repository", "Repository Access"),
+                protocol::EnumOption::new("terminal", "Terminal Commands"),
             ])
             .title("Access")
             .description("Choose what the agent can use for this authorization.")
@@ -795,7 +802,7 @@ fn preview_form_schema() -> acp::ElicitationSchema {
         )
         .property(
             "remember",
-            acp::BooleanPropertySchema::new()
+            protocol::BooleanPropertySchema::new()
                 .title("Remember Authorization")
                 .description("Store this authorization for future sessions.")
                 .default_value(true),
@@ -803,7 +810,7 @@ fn preview_form_schema() -> acp::ElicitationSchema {
         )
 }
 
-fn single_select_options(schema: &acp::StringPropertySchema) -> Vec<ElicitationOption> {
+fn single_select_options(schema: &protocol::StringPropertySchema) -> Vec<ElicitationOption> {
     if let Some(options) = &schema.one_of {
         return options
             .iter()
@@ -827,7 +834,7 @@ fn single_select_options(schema: &acp::StringPropertySchema) -> Vec<ElicitationO
 }
 
 fn single_select_default_value(
-    schema: &acp::StringPropertySchema,
+    schema: &protocol::StringPropertySchema,
     options: &[ElicitationOption],
 ) -> Option<String> {
     schema
@@ -841,9 +848,9 @@ fn single_select_default_value(
         .cloned()
 }
 
-fn multi_select_options(schema: &acp::MultiSelectPropertySchema) -> Vec<ElicitationOption> {
+fn multi_select_options(schema: &protocol::MultiSelectPropertySchema) -> Vec<ElicitationOption> {
     match &schema.items {
-        acp::MultiSelectItems::Untitled(items) => items
+        protocol::MultiSelectItems::Untitled(items) => items
             .values
             .iter()
             .map(|value| ElicitationOption {
@@ -851,7 +858,7 @@ fn multi_select_options(schema: &acp::MultiSelectPropertySchema) -> Vec<Elicitat
                 label: SharedString::from(value.clone()),
             })
             .collect(),
-        acp::MultiSelectItems::Titled(items) => items
+        protocol::MultiSelectItems::Titled(items) => items
             .options
             .iter()
             .map(|option| ElicitationOption {
@@ -865,7 +872,7 @@ fn multi_select_options(schema: &acp::MultiSelectPropertySchema) -> Vec<Elicitat
 
 fn validate_number_value(
     title: SharedString,
-    schema: &acp::NumberPropertySchema,
+    schema: &protocol::NumberPropertySchema,
     value: &str,
 ) -> Result<f64, SharedString> {
     let parsed = value
@@ -890,7 +897,7 @@ fn validate_number_value(
 
 fn validate_integer_value(
     title: SharedString,
-    schema: &acp::IntegerPropertySchema,
+    schema: &protocol::IntegerPropertySchema,
     value: &str,
 ) -> Result<i64, SharedString> {
     let parsed = value
@@ -912,7 +919,7 @@ fn validate_integer_value(
 
 fn validate_string_value(
     title: SharedString,
-    schema: &acp::StringPropertySchema,
+    schema: &protocol::StringPropertySchema,
     value: &str,
 ) -> Result<(), SharedString> {
     let length = value.chars().count();
@@ -934,7 +941,7 @@ fn validate_string_value(
 
 fn validate_single_select_value(
     title: SharedString,
-    schema: &acp::StringPropertySchema,
+    schema: &protocol::StringPropertySchema,
     value: &str,
 ) -> Result<(), SharedString> {
     let options = single_select_options(schema);
@@ -947,7 +954,7 @@ fn validate_single_select_value(
 
 fn validate_string_pattern_and_format(
     title: SharedString,
-    schema: &acp::StringPropertySchema,
+    schema: &protocol::StringPropertySchema,
     value: &str,
 ) -> Result<(), SharedString> {
     if schema.pattern.is_none() && schema.format.and_then(string_format_json_name).is_none() {
@@ -998,45 +1005,45 @@ fn validate_string_pattern_and_format(
     }
 }
 
-fn string_format_json_name(format: acp::StringFormat) -> Option<&'static str> {
+fn string_format_json_name(format: protocol::StringFormat) -> Option<&'static str> {
     match format {
-        acp::StringFormat::Email => Some("email"),
-        acp::StringFormat::Uri => Some("uri"),
-        acp::StringFormat::Date => Some("date"),
-        acp::StringFormat::DateTime => Some("date-time"),
+        protocol::StringFormat::Email => Some("email"),
+        protocol::StringFormat::Uri => Some("uri"),
+        protocol::StringFormat::Date => Some("date"),
+        protocol::StringFormat::DateTime => Some("date-time"),
         _ => None,
     }
 }
 
-fn string_format_label(format: acp::StringFormat) -> Option<&'static str> {
+fn string_format_label(format: protocol::StringFormat) -> Option<&'static str> {
     match format {
-        acp::StringFormat::Email => Some("an email address"),
-        acp::StringFormat::Uri => Some("a URI"),
-        acp::StringFormat::Date => Some("a date"),
-        acp::StringFormat::DateTime => Some("a date and time"),
+        protocol::StringFormat::Email => Some("an email address"),
+        protocol::StringFormat::Uri => Some("a URI"),
+        protocol::StringFormat::Date => Some("a date"),
+        protocol::StringFormat::DateTime => Some("a date and time"),
         _ => None,
     }
 }
 
-fn property_title(name: &str, property: &acp::ElicitationPropertySchema) -> SharedString {
+fn property_title(name: &str, property: &protocol::ElicitationPropertySchema) -> SharedString {
     let title = match property {
-        acp::ElicitationPropertySchema::String(schema) => schema.title.as_deref(),
-        acp::ElicitationPropertySchema::Number(schema) => schema.title.as_deref(),
-        acp::ElicitationPropertySchema::Integer(schema) => schema.title.as_deref(),
-        acp::ElicitationPropertySchema::Boolean(schema) => schema.title.as_deref(),
-        acp::ElicitationPropertySchema::Array(schema) => schema.title.as_deref(),
+        protocol::ElicitationPropertySchema::String(schema) => schema.title.as_deref(),
+        protocol::ElicitationPropertySchema::Number(schema) => schema.title.as_deref(),
+        protocol::ElicitationPropertySchema::Integer(schema) => schema.title.as_deref(),
+        protocol::ElicitationPropertySchema::Boolean(schema) => schema.title.as_deref(),
+        protocol::ElicitationPropertySchema::Array(schema) => schema.title.as_deref(),
         _ => None,
     };
     SharedString::from(title.unwrap_or(name).to_string())
 }
 
-fn property_description(property: &acp::ElicitationPropertySchema) -> Option<SharedString> {
+fn property_description(property: &protocol::ElicitationPropertySchema) -> Option<SharedString> {
     match property {
-        acp::ElicitationPropertySchema::String(schema) => schema.description.clone(),
-        acp::ElicitationPropertySchema::Number(schema) => schema.description.clone(),
-        acp::ElicitationPropertySchema::Integer(schema) => schema.description.clone(),
-        acp::ElicitationPropertySchema::Boolean(schema) => schema.description.clone(),
-        acp::ElicitationPropertySchema::Array(schema) => schema.description.clone(),
+        protocol::ElicitationPropertySchema::String(schema) => schema.description.clone(),
+        protocol::ElicitationPropertySchema::Number(schema) => schema.description.clone(),
+        protocol::ElicitationPropertySchema::Integer(schema) => schema.description.clone(),
+        protocol::ElicitationPropertySchema::Boolean(schema) => schema.description.clone(),
+        protocol::ElicitationPropertySchema::Array(schema) => schema.description.clone(),
         _ => None,
     }
     .map(SharedString::from)
@@ -1097,7 +1104,10 @@ pub(crate) fn should_render_elicitation(elicitation: &Elicitation) -> bool {
     matches!(
         (&elicitation.status, &elicitation.request.mode),
         (ElicitationStatus::Pending { .. }, _)
-            | (ElicitationStatus::Accepted, acp::ElicitationMode::Url(_))
+            | (
+                ElicitationStatus::Accepted,
+                protocol::ElicitationMode::Url(_)
+            )
     )
 }
 
@@ -1168,7 +1178,10 @@ impl<'a> ElicitationCard<'a> {
         let is_pending = matches!(&self.elicitation.status, ElicitationStatus::Pending { .. });
         let is_accepted_url = matches!(
             (&self.elicitation.status, &self.elicitation.request.mode),
-            (ElicitationStatus::Accepted, acp::ElicitationMode::Url(_))
+            (
+                ElicitationStatus::Accepted,
+                protocol::ElicitationMode::Url(_)
+            )
         );
         let (status_label, status_icon, status_color) = match &self.elicitation.status {
             ElicitationStatus::Pending { .. } => ("Waiting for input", IconName::Info, Color::Info),
@@ -1186,10 +1199,10 @@ impl<'a> ElicitationCard<'a> {
             .p_3()
             .child(Label::new(self.elicitation.request.message.clone()).size(LabelSize::Small));
         let body = match &self.elicitation.request.mode {
-            acp::ElicitationMode::Form(mode) if is_pending => {
+            protocol::ElicitationMode::Form(mode) if is_pending => {
                 body.child(self.render_form(mode, cx))
             }
-            acp::ElicitationMode::Url(mode) if is_pending || is_accepted_url => {
+            protocol::ElicitationMode::Url(mode) if is_pending || is_accepted_url => {
                 body.child(self.render_url_elicitation(mode))
             }
             _ => body,
@@ -1235,7 +1248,7 @@ impl<'a> ElicitationCard<'a> {
             .when(is_pending, |this| this.child(self.render_actions(cx)))
     }
 
-    fn render_form(&self, mode: &acp::ElicitationFormMode, cx: &App) -> AnyElement {
+    fn render_form(&self, mode: &protocol::ElicitationFormMode, cx: &App) -> AnyElement {
         let Some(state) = self.form_state else {
             return Empty.into_any_element();
         };
@@ -1260,7 +1273,7 @@ impl<'a> ElicitationCard<'a> {
     fn render_field(
         &self,
         field_name: &str,
-        property: &acp::ElicitationPropertySchema,
+        property: &protocol::ElicitationPropertySchema,
         field: &ElicitationFieldState,
         error: Option<&SharedString>,
         cx: &App,
@@ -1364,7 +1377,7 @@ impl<'a> ElicitationCard<'a> {
                 ElicitationFieldState::Boolean(_) => Empty.into_any_element(),
                 ElicitationFieldState::SingleSelect { value } => {
                     let options = match property {
-                        acp::ElicitationPropertySchema::String(schema) => {
+                        protocol::ElicitationPropertySchema::String(schema) => {
                             single_select_options(schema)
                         }
                         _ => Vec::new(),
@@ -1379,7 +1392,7 @@ impl<'a> ElicitationCard<'a> {
                 }
                 ElicitationFieldState::MultiSelect(selected) => {
                     let options = match property {
-                        acp::ElicitationPropertySchema::Array(schema) => {
+                        protocol::ElicitationPropertySchema::Array(schema) => {
                             multi_select_options(schema)
                         }
                         _ => Vec::new(),
@@ -1546,7 +1559,7 @@ impl<'a> ElicitationCard<'a> {
             })
     }
 
-    fn render_url_elicitation(&self, mode: &acp::ElicitationUrlMode) -> AnyElement {
+    fn render_url_elicitation(&self, mode: &protocol::ElicitationUrlMode) -> AnyElement {
         v_flex()
             .gap_2()
             .child(Self::render_url_summary(&mode.url))
@@ -1578,7 +1591,7 @@ impl<'a> ElicitationCard<'a> {
 
     fn render_actions(&self, cx: &App) -> AnyElement {
         let open_url = match &self.elicitation.request.mode {
-            acp::ElicitationMode::Url(mode) => Some(mode.url.clone()),
+            protocol::ElicitationMode::Url(mode) => Some(mode.url.clone()),
             _ => None,
         };
         let (accept_label, accept_icon, accept_icon_color) = if open_url.is_some() {

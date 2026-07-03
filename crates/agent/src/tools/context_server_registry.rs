@@ -1,5 +1,5 @@
 use crate::{AgentToolOutput, AnyAgentTool, ToolCallEventStream, ToolInput};
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::protocol;
 use anyhow::Result;
 use collections::{BTreeMap, HashMap};
 use context_server::{ContextServerId, client::NotificationSubscription};
@@ -306,8 +306,8 @@ impl AnyAgentTool for ContextServerTool {
         self.tool.description.clone().unwrap_or_default().into()
     }
 
-    fn kind(&self) -> acp::ToolKind {
-        acp::ToolKind::Other
+    fn kind(&self) -> protocol::ToolKind {
+        protocol::ToolKind::Other
     }
 
     fn initial_title(&self, _input: serde_json::Value, _cx: &mut App) -> SharedString {
@@ -401,14 +401,14 @@ impl AnyAgentTool for ContextServerTool {
                 match content {
                     context_server::types::ToolResponseContent::Text { text } => {
                         concatenated_text.push_str(&text);
-                        tool_call_content.push(acp::ToolCallContent::Content(acp::Content::new(
-                            acp::ContentBlock::Text(acp::TextContent::new(text.clone())),
+                        tool_call_content.push(protocol::ToolCallContent::Content(protocol::Content::new(
+                            protocol::ContentBlock::Text(protocol::TextContent::new(text.clone())),
                         )));
                         llm_output.push(LanguageModelToolResultContent::Text(text.into()));
                     }
                     context_server::types::ToolResponseContent::Image { data, mime_type } => {
-                        tool_call_content.push(acp::ToolCallContent::Content(acp::Content::new(
-                            acp::ContentBlock::Image(acp::ImageContent::new(
+                        tool_call_content.push(protocol::ToolCallContent::Content(protocol::Content::new(
+                            protocol::ContentBlock::Image(protocol::ImageContent::new(
                                 data.clone(),
                                 mime_type.clone(),
                             )),
@@ -453,7 +453,7 @@ impl AnyAgentTool for ContextServerTool {
             }
             if !tool_call_content.is_empty() {
                 event_stream
-                    .update_fields(acp::ToolCallUpdateFields::new().content(tool_call_content));
+                    .update_fields(protocol::ToolCallUpdateFields::new().content(tool_call_content));
             }
             let raw_output = serde_json::Value::String(concatenated_text);
             Ok(AgentToolOutput {

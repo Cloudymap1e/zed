@@ -8014,11 +8014,11 @@ fn ai_page(cx: &App) -> SettingsPage {
                 r#type: Default::default(),
                 json_path: Some("agent_servers"),
                 description: Some(
-                    "View, add, and remove agents connected through the Agent Client Protocol."
+                    "View, add, and remove agents connected through the External Agent protocol."
                         .into(),
                 ),
                 search_aliases: &[
-                    "acp",
+                    "external agent",
                     "agent client protocol",
                     "amp",
                     "claude agent",

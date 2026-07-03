@@ -133,20 +133,24 @@ pub async fn run_prediction(
         provider,
         PredictionProvider::Zeta1 | PredictionProvider::Zeta2(_)
     ) {
-        step_progress.set_substatus("authenticating");
-        static AUTHENTICATED: OnceLock<Shared<Task<()>>> = OnceLock::new();
-        AUTHENTICATED
-            .get_or_init(|| {
-                let client = app_state.client.clone();
-                cx.spawn(async move |cx| {
-                    if let Err(e) = client.sign_in_with_optional_connect(true, cx).await {
-                        eprintln!("Authentication failed: {}", e);
-                    }
+        if cx.update(|cx| client::zed_account_auth_disabled(cx)) {
+            step_progress.set_substatus("auth disabled in Zed Dev");
+        } else {
+            step_progress.set_substatus("authenticating");
+            static AUTHENTICATED: OnceLock<Shared<Task<()>>> = OnceLock::new();
+            AUTHENTICATED
+                .get_or_init(|| {
+                    let client = app_state.client.clone();
+                    cx.spawn(async move |cx| {
+                        if let Err(e) = client.sign_in_with_optional_connect(true, cx).await {
+                            eprintln!("Authentication failed: {}", e);
+                        }
+                    })
+                    .shared()
                 })
-                .shared()
-            })
-            .clone()
-            .await;
+                .clone()
+                .await;
+        }
     }
 
     let ep_store = cx

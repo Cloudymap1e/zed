@@ -1184,7 +1184,7 @@ pub fn prepare_task_for_spawn(
 ) -> SpawnInTerminal {
     let builder = ShellBuilder::new(shell, is_windows);
     let command_label = builder.command_label(task.command.as_deref().unwrap_or(""));
-    let (command, args) = builder.build_no_quote(task.command.clone(), &task.args);
+    let (command, args) = builder.build_with_unquoted_command(task.command.clone(), &task.args);
 
     SpawnInTerminal {
         command_label,
@@ -1796,6 +1796,31 @@ mod tests {
         assert_eq!(
             item_count, 5,
             "Terminal panel should bypass max_tabs limit and have all 5 terminals"
+        );
+    }
+
+    #[test]
+    fn test_prepare_task_quotes_appended_args() {
+        let input = SpawnInTerminal {
+            command: Some("echo".to_string()),
+            args: vec![
+                "src/$paramId/example.test.ts".to_string(),
+                "path with spaces/file.test.ts".to_string(),
+            ],
+            ..SpawnInTerminal::default()
+        };
+        let shell = Shell::Program("sh".to_owned());
+
+        let result = prepare_task_for_spawn(&input, &shell, false);
+
+        assert_eq!(result.command, Some("sh".to_string()));
+        assert_eq!(
+            result.args,
+            vec![
+                "-i".to_string(),
+                "-c".to_string(),
+                "echo 'src/$paramId/example.test.ts' 'path with spaces/file.test.ts'".to_string()
+            ]
         );
     }
 

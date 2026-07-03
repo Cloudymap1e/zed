@@ -47,7 +47,7 @@ If you have External Agents installed, Zed will detect whether you have existing
 
 Each thread runs independently, so you can send a prompt, open a second thread, and give it a different task while the first continues working. To scope a new thread to a specific project, hover over that project's header in the Threads Sidebar and click the `+` button, or use {#action agents_sidebar::NewThreadInGroup} from the keyboard. See [Creating New Threads](./agent-panel.md#new-thread) for the other entry points.
 
-Each thread can use a different agent, so you can run Zed's built-in agent in one thread and an [External Agent](./external-agents.md) like Claude Code or Codex in another.
+Each thread can use a different agent, so you can run Claude, Codex, OpenCode, or another [External Agent](./external-agents.md) in separate threads.
 
 ### Thread Types {#thread-types}
 
@@ -55,8 +55,8 @@ The Threads Sidebar can hold different thread types:
 
 | Thread type                                   | Configuration                                                                   |
 | --------------------------------------------- | ------------------------------------------------------------------------------- |
-| [Zed Agent thread](./zed-agent.md)            | Uses Zed Agent settings, profiles, tools, Skills, Instructions, and MCP         |
-| [External Agent thread](./external-agents.md) | Uses the ACP integration and the agent's native configuration                   |
+
+| [External Agent thread](./external-agents.md) | Uses the External Agent integration and the agent's native configuration                   |
 | [Terminal Thread](./terminal-threads.md)      | Runs a CLI/TUI in a terminal-backed thread; the CLI owns auth and configuration |
 
 ## Multiple Projects {#multiple-projects}
@@ -88,6 +88,6 @@ After the agent finishes, review the diff and merge the changes through your nor
 ## See Also {#see-also}
 
 - [Agent Panel](./agent-panel.md): Manage individual threads and configure the agent
-- [External Agents](./external-agents.md): Use ACP-integrated External Agents
+- [External Agents](./external-agents.md): Use External Agent External Agents
 - [Terminal Threads](./terminal-threads.md): Run agent CLIs and TUIs directly in Zed
 - [Tools](./tools.md): Built-in tools available in each thread

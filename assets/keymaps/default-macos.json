@@ -289,13 +289,13 @@
     },
   },
   {
-    "context": "AcpThread > ModeSelector",
+    "context": "AgentThread > ModeSelector",
     "bindings": {
       "cmd-enter": "menu::Confirm",
     },
   },
   {
-    "context": "AcpThread",
+    "context": "AgentThread",
     "use_key_equivalents": true,
     "bindings": {
       "cmd-n": "agent::NewThread",
@@ -344,7 +344,7 @@
     },
   },
   {
-    "context": "AcpThreadSearchBar",
+    "context": "AgentThreadSearchBar",
     "use_key_equivalents": true,
     "bindings": {
       "escape": "agent::DismissThreadSearch",
@@ -354,14 +354,14 @@
     },
   },
   {
-    "context": "AcpThreadSearchBar > Editor",
+    "context": "AgentThreadSearchBar > Editor",
     "use_key_equivalents": true,
     "bindings": {
       "shift-enter": "agent::SelectPreviousThreadMatch",
     },
   },
   {
-    "context": "AcpThread > Editor",
+    "context": "AgentThread > Editor",
     "use_key_equivalents": true,
     "bindings": {
       "ctrl-pageup": "agent::ScrollOutputPageUp",
@@ -396,7 +396,7 @@
     },
   },
   {
-    "context": "AcpThread > Editor && start_of_input",
+    "context": "AgentThread > Editor && start_of_input",
     "use_key_equivalents": true,
     "bindings": {
       "pageup": "agent::ScrollOutputPageUp",
@@ -405,7 +405,7 @@
     },
   },
   {
-    "context": "AcpThread > Editor && end_of_input",
+    "context": "AgentThread > Editor && end_of_input",
     "use_key_equivalents": true,
     "bindings": {
       "pagedown": "agent::ScrollOutputPageDown",
@@ -414,21 +414,21 @@
     },
   },
   {
-    "context": "AcpThread > Editor && mode == full",
+    "context": "AgentThread > Editor && mode == full",
     "use_key_equivalents": true,
     "bindings": {
       "alt-enter": "editor::OpenExcerpts",
     },
   },
   {
-    "context": "AcpThread > Editor && !use_modifier_to_send",
+    "context": "AgentThread > Editor && !use_modifier_to_send",
     "use_key_equivalents": true,
     "bindings": {
       "enter": "agent::Chat",
     },
   },
   {
-    "context": "AcpThread > Editor && use_modifier_to_send",
+    "context": "AgentThread > Editor && use_modifier_to_send",
     "use_key_equivalents": true,
     "bindings": {
       "cmd-enter": "agent::Chat",
@@ -955,7 +955,7 @@
     },
   },
   {
-    "context": "!AcpThread > Editor && mode == full",
+    "context": "!AgentThread > Editor && mode == full",
     "use_key_equivalents": true,
     "bindings": {
       "alt-enter": "editor::OpenExcerpts",

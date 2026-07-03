@@ -3,8 +3,10 @@ use std::{
     sync::Arc,
 };
 
-use agent::{ThreadStore, ZED_AGENT_ID};
-use agent_client_protocol::schema::v1 as acp;
+#[cfg(test)]
+use agent::ThreadStore;
+use agent::ZED_AGENT_ID;
+use agent_thread::protocol;
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 use collections::{HashMap, HashSet};
@@ -87,15 +89,13 @@ pub(crate) fn run_thread_metadata_migrations(connection: &db::sqlez::connection:
 
 pub fn init(cx: &mut App) {
     ThreadMetadataStore::init_global(cx);
-    let migration_task = migrate_thread_metadata(cx);
-    migrate_thread_remote_connections(cx, migration_task);
+    migrate_thread_remote_connections(cx, Task::ready(anyhow::Ok(())));
     migrate_thread_ids(cx);
 }
 
-/// Migrate existing thread metadata from native agent thread store to the new metadata storage.
+/// Test-only coverage for migrating old thread-store rows to metadata storage.
 /// We skip migrating threads that do not have a project.
-///
-/// TODO: Remove this after N weeks of shipping the sidebar
+#[cfg(test)]
 fn migrate_thread_metadata(cx: &mut App) -> Task<anyhow::Result<()>> {
     let store = ThreadMetadataStore::global(cx);
     let db = store.read(cx).db.clone();
@@ -303,12 +303,12 @@ fn migrate_thread_ids(cx: &mut App) {
 struct GlobalThreadMetadataStore(Entity<ThreadMetadataStore>);
 impl Global for GlobalThreadMetadataStore {}
 
-/// Lightweight metadata for any thread (native or ACP), enough to populate
+/// Lightweight metadata for any thread (legacy or External Agent), enough to populate
 /// the sidebar list and route to the correct load path when clicked.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThreadMetadata {
     pub thread_id: ThreadId,
-    pub session_id: Option<acp::SessionId>,
+    pub session_id: Option<protocol::SessionId>,
     pub agent_id: AgentId,
     pub title: Option<SharedString>,
     /// User-supplied title that takes precedence over `title`. Set when the
@@ -327,7 +327,7 @@ pub struct ThreadMetadata {
 
 impl ThreadMetadata {
     /// A thread is a draft until its first message is sent, at which point
-    /// it gets an ACP `session_id`.
+    /// it gets an External Agent `session_id`.
     pub fn is_draft(&self) -> bool {
         self.session_id.is_none()
     }
@@ -435,12 +435,12 @@ pub fn worktree_info_from_thread_paths<S: std::hash::BuildHasher>(
     infos
 }
 
-impl From<&ThreadMetadata> for acp_thread::AgentSessionInfo {
+impl From<&ThreadMetadata> for agent_thread::AgentSessionInfo {
     fn from(meta: &ThreadMetadata) -> Self {
         let session_id = meta
             .session_id
             .clone()
-            .unwrap_or_else(|| acp::SessionId::new(meta.thread_id.0.to_string()));
+            .unwrap_or_else(|| protocol::SessionId::new(meta.thread_id.0.to_string()));
         Self {
             session_id,
             work_dirs: Some(meta.folder_paths().clone()),
@@ -502,7 +502,7 @@ pub struct ThreadMetadataStore {
     threads: HashMap<ThreadId, ThreadMetadata>,
     threads_by_paths: HashMap<PathList, HashSet<ThreadId>>,
     threads_by_main_paths: HashMap<PathList, HashSet<ThreadId>>,
-    threads_by_session: HashMap<acp::SessionId, ThreadId>,
+    threads_by_session: HashMap<protocol::SessionId, ThreadId>,
     reload_task: Option<Shared<Task<()>>>,
     conversation_subscriptions: HashMap<gpui::EntityId, Subscription>,
     pending_thread_ops_tx: async_channel::Sender<DbOperation>,
@@ -590,8 +590,8 @@ impl ThreadMetadataStore {
         self.threads.get(&thread_id)
     }
 
-    /// Returns the metadata for a thread identified by its ACP session ID.
-    pub fn entry_by_session(&self, session_id: &acp::SessionId) -> Option<&ThreadMetadata> {
+    /// Returns the metadata for a thread identified by its External Agent session ID.
+    pub fn entry_by_session(&self, session_id: &protocol::SessionId) -> Option<&ThreadMetadata> {
         let thread_id = self.threads_by_session.get(session_id)?;
         self.threads.get(thread_id)
     }
@@ -1496,11 +1496,7 @@ impl ThreadMetadataDb {
     /// then flow through this same upsert path.
     pub async fn save(&self, row: ThreadMetadata) -> anyhow::Result<()> {
         let session_id = row.session_id.as_ref().map(|s| s.0.clone());
-        let agent_id = if row.agent_id.as_ref() == ZED_AGENT_ID.as_ref() {
-            None
-        } else {
-            Some(row.agent_id.to_string())
-        };
+        let agent_id = Some(row.agent_id.to_string());
         let title = row
             .title
             .as_ref()
@@ -1771,7 +1767,7 @@ impl Column for ThreadMetadata {
         Ok((
             ThreadMetadata {
                 thread_id,
-                session_id: id.map(acp::SessionId::new),
+                session_id: id.map(protocol::SessionId::new),
                 agent_id,
                 title: if title.is_empty() || title == DEFAULT_THREAD_TITLE {
                     None
@@ -1821,10 +1817,10 @@ impl Column for ArchivedGitWorktree {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use acp_thread::StubAgentConnection;
     use action_log::ActionLog;
     use agent::DbThread;
-    use agent_client_protocol::schema::v1 as acp;
+    use agent_thread::StubAgentConnection;
+    use agent_thread::protocol;
     use gpui::{TestAppContext, VisualTestContext};
     use project::FakeFs;
     use project::Project;
@@ -1864,7 +1860,7 @@ mod tests {
         ThreadMetadata {
             thread_id: ThreadId::new(),
             archived: false,
-            session_id: Some(acp::SessionId::new(session_id)),
+            session_id: Some(protocol::SessionId::new(session_id)),
             agent_id: agent::ZED_AGENT_ID.clone(),
             title: if title.is_empty() {
                 None
@@ -1971,6 +1967,39 @@ mod tests {
         assert_eq!(rows[0].title.as_deref(), Some("Agent Generated Title"));
         assert_eq!(rows[0].title_override.as_deref(), Some("User Title"));
         assert_eq!(rows[0].title().as_deref(), Some("User Title"));
+    }
+
+    #[gpui::test]
+    async fn test_database_persists_removed_agent_id_explicitly(_cx: &mut TestAppContext) {
+        let now = Utc::now();
+        let mut metadata = make_metadata(
+            "session-1",
+            "Removed Agent Thread",
+            now,
+            PathList::new(&[Path::new("/project-a")]),
+        );
+        metadata.agent_id = agent::ZED_AGENT_ID.clone();
+
+        let thread = std::thread::current();
+        let test_name = thread.name().unwrap_or("unknown_test");
+        let db_name = format!("THREAD_METADATA_DB_{}", test_name);
+        let db = ThreadMetadataDb(gpui::block_on(db::open_test_db::<ThreadMetadataDb>(
+            &db_name,
+        )));
+
+        db.save(metadata).await.unwrap();
+
+        let persisted_agent_id =
+            db.0.select_row_bound::<(), Option<String>>(
+                "SELECT agent_id FROM sidebar_threads WHERE session_id = 'session-1'",
+            )
+            .unwrap()(())
+            .unwrap()
+            .flatten();
+        assert_eq!(
+            persisted_agent_id.as_deref(),
+            Some(agent::ZED_AGENT_ID.as_ref())
+        );
     }
 
     #[gpui::test]
@@ -2084,12 +2113,12 @@ mod tests {
             assert_eq!(store.entry_ids().count(), 2);
             assert!(
                 store
-                    .entry_by_session(&acp::SessionId::new("session-1"))
+                    .entry_by_session(&protocol::SessionId::new("session-1"))
                     .is_some()
             );
             assert!(
                 store
-                    .entry_by_session(&acp::SessionId::new("session-2"))
+                    .entry_by_session(&protocol::SessionId::new("session-2"))
                     .is_some()
             );
 
@@ -2161,7 +2190,7 @@ mod tests {
 
         let moved_metadata = ThreadMetadata {
             thread_id: session1_thread_id,
-            session_id: Some(acp::SessionId::new("session-1")),
+            session_id: Some(protocol::SessionId::new("session-1")),
             agent_id: agent::ZED_AGENT_ID.clone(),
             title: Some("First Thread".into()),
             title_override: None,
@@ -2189,12 +2218,12 @@ mod tests {
             assert_eq!(store.entry_ids().count(), 2);
             assert!(
                 store
-                    .entry_by_session(&acp::SessionId::new("session-1"))
+                    .entry_by_session(&protocol::SessionId::new("session-1"))
                     .is_some()
             );
             assert!(
                 store
-                    .entry_by_session(&acp::SessionId::new("session-2"))
+                    .entry_by_session(&protocol::SessionId::new("session-2"))
                     .is_some()
             );
 
@@ -2246,7 +2275,7 @@ mod tests {
 
         let existing_metadata = ThreadMetadata {
             thread_id: ThreadId::new(),
-            session_id: Some(acp::SessionId::new("a-session-0")),
+            session_id: Some(protocol::SessionId::new("a-session-0")),
             agent_id: agent::ZED_AGENT_ID.clone(),
             title: Some("Existing Metadata".into()),
             title_override: None,
@@ -2301,7 +2330,7 @@ mod tests {
                 let paths = paths.clone();
                 thread_store.update(cx, |store, cx| {
                     store.save_thread(
-                        acp::SessionId::new(session_id),
+                        protocol::SessionId::new(session_id),
                         make_db_thread(&title, *updated_at),
                         paths,
                         cx,
@@ -2372,7 +2401,7 @@ mod tests {
 
         let existing_metadata = ThreadMetadata {
             thread_id: ThreadId::new(),
-            session_id: Some(acp::SessionId::new("existing-session")),
+            session_id: Some(protocol::SessionId::new("existing-session")),
             agent_id: agent::ZED_AGENT_ID.clone(),
             title: Some("Existing Metadata".into()),
             title_override: None,
@@ -2396,7 +2425,7 @@ mod tests {
             let thread_store = ThreadStore::global(cx);
             thread_store.update(cx, |store, cx| {
                 store.save_thread(
-                    acp::SessionId::new("existing-session"),
+                    protocol::SessionId::new("existing-session"),
                     make_db_thread(
                         "Updated Native Thread Title",
                         existing_updated_at + chrono::Duration::seconds(1),
@@ -2485,7 +2514,7 @@ mod tests {
             let store = ThreadMetadataStore::global(cx);
             store
                 .read(cx)
-                .entry_by_session(&acp::SessionId::new("remote-session"))
+                .entry_by_session(&protocol::SessionId::new("remote-session"))
                 .cloned()
                 .expect("expected migrated metadata row")
         });
@@ -2536,7 +2565,7 @@ mod tests {
                 let paths = paths.clone();
                 thread_store.update(cx, |store, cx| {
                     store.save_thread(
-                        acp::SessionId::new(session_id),
+                        protocol::SessionId::new(session_id),
                         make_db_thread(&title, *updated_at),
                         paths,
                         cx,
@@ -2615,7 +2644,7 @@ mod tests {
                 let paths = project_paths.clone();
                 thread_store.update(cx, |store, cx| {
                     store.save_thread(
-                        acp::SessionId::new(session_id),
+                        protocol::SessionId::new(session_id),
                         make_db_thread(&title, updated_at),
                         paths,
                         cx,
@@ -2842,15 +2871,15 @@ mod tests {
         });
         vcx.run_until_parked();
 
-        // Create a standalone subagent AcpThread (not wrapped in a
+        // Create a standalone subagent AgentThread (not wrapped in a
         // ConversationView). The ThreadMetadataStore only observes
         // ConversationView events, so this thread's events should
         // have no effect on sidebar metadata.
-        let subagent_session_id = acp::SessionId::new("subagent-session");
+        let subagent_session_id = protocol::SessionId::new("subagent-session");
         let subagent_thread = cx.update(|cx| {
             let action_log = cx.new(|_| ActionLog::new(project.clone()));
             cx.new(|cx| {
-                acp_thread::AcpThread::new(
+                agent_thread::AgentThread::new(
                     Some(regular_session_id.clone()),
                     Some("Subagent Thread".into()),
                     None,
@@ -2858,7 +2887,7 @@ mod tests {
                     project.clone(),
                     action_log,
                     subagent_session_id.clone(),
-                    watch::Receiver::constant(acp::PromptCapabilities::new()),
+                    watch::Receiver::constant(protocol::PromptCapabilities::new()),
                     cx,
                 )
             })
@@ -3117,7 +3146,7 @@ mod tests {
         let local_linked_thread = ThreadMetadata {
             thread_id: ThreadId::new(),
             archived: false,
-            session_id: Some(acp::SessionId::new("local-linked")),
+            session_id: Some(protocol::SessionId::new("local-linked")),
             agent_id: agent::ZED_AGENT_ID.clone(),
             title: Some("Local Linked".into()),
             title_override: None,
@@ -3131,7 +3160,7 @@ mod tests {
         let remote_linked_thread = ThreadMetadata {
             thread_id: ThreadId::new(),
             archived: false,
-            session_id: Some(acp::SessionId::new("remote-linked")),
+            session_id: Some(protocol::SessionId::new("remote-linked")),
             agent_id: agent::ZED_AGENT_ID.clone(),
             title: Some("Remote Linked".into()),
             title_override: None,
@@ -3232,17 +3261,17 @@ mod tests {
             assert_eq!(store.entries().count(), 3);
             assert!(
                 store
-                    .entry_by_session(&acp::SessionId::new("session-1"))
+                    .entry_by_session(&protocol::SessionId::new("session-1"))
                     .is_some()
             );
             assert!(
                 store
-                    .entry_by_session(&acp::SessionId::new("session-2"))
+                    .entry_by_session(&protocol::SessionId::new("session-2"))
                     .is_some()
             );
             assert!(
                 store
-                    .entry_by_session(&acp::SessionId::new("session-3"))
+                    .entry_by_session(&protocol::SessionId::new("session-3"))
                     .is_some()
             );
 
@@ -3291,7 +3320,7 @@ mod tests {
             let store = store.read(cx);
 
             let thread = store
-                .entry_by_session(&acp::SessionId::new("session-1"))
+                .entry_by_session(&protocol::SessionId::new("session-1"))
                 .expect("thread should exist after reload");
             assert!(thread.archived);
 

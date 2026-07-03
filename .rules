@@ -11,9 +11,21 @@
   - Use explicit error handling with `match` or `if let Err(...)` when you need custom logic
   - Example: avoid `let _ = client.request(...).await?;` - use `client.request(...).await?;` instead
 * When implementing async operations that may fail, ensure errors propagate to the UI layer so users get meaningful feedback.
+* Do not add or use fallback behavior unless the user explicitly authorizes fallback for that task. When a primary path fails, expose the real failure with a clear error, log, or UI message instead of silently degrading to a secondary path. Fallbacks must not hide integration, protocol, build, runtime, or UI-contract bugs.
 * Never create files with `mod.rs` paths - prefer `src/some_module.rs` instead of `src/some_module/mod.rs`.
 * When creating new crates, prefer specifying the library root path in `Cargo.toml` using `[lib] path = "...rs"` instead of the default `lib.rs`, to maintain consistent and descriptive naming (e.g., `gpui.rs` or `main.rs`).
 * Avoid creative additions unless explicitly requested
+
+# HTML artifacts
+
+- When creating or updating an HTML report/artifact, open it locally before the final response; do not only provide a file path or link. Prefer Firefox for opening HTML artifacts. If opening fails, report the exact command/error and provide the path as fallback.
+
+# Local main and remote safety
+
+- It is acceptable to merge private Zed Dev maintenance branches into the local `main` branch when the user asks for local main integration, but never push `main` or private Zed Dev maintenance branches to any remote unless the user explicitly asks for a remote push in that turn.
+- Do not merge WIP, long-running refactor, or team-owned branches into local `main` unless the user explicitly confirms that exact source branch and destination branch. Reviewing a branch, finding patch-equivalent commits, or seeing source-present behavior is not the same as merging it.
+- After any merge, rollback, reset, cherry-pick, or branch-integration work, report the exact refs: destination branch and HEAD, source branches that are graph-merged, branches only reviewed or patch-equivalent, branches intentionally excluded, rollback backup refs, and tests actually run. Be precise enough that the user does not need a git graph tool.
+
 * Use full words for variable names (no abbreviations like "q" for "queue")
 * Use variable shadowing to scope clones in async contexts for clarity, minimizing the lifetime of borrowed references.
   Example:
@@ -186,3 +198,18 @@ Rules emerge from validated patterns, not one-off observations. The workflow is:
 1. Agent notes a pattern during a session.
 2. Team validates the pattern in code review.
 3. A dedicated commit adds the rule with context on *why* it exists.
+
+<!-- BEGIN:project-location-guidance -->
+
+## Project Location Guidance
+
+- Keep new checkouts under the machine's canonical project root for that host.
+- Do not create duplicate project checkouts in unrelated home, app, or service directories; use symlinks only when required for compatibility.
+
+<!-- END:project-location-guidance -->
+
+
+- Only rebuildable compilation artifacts may be placed on external build disks. Never put installed application bundles, launch/runtime support data, user data, caches required for app startup, or active app support directories on external disks; keep those on the internal disk.
+- Never install a debug Zed app for real use. Do not use `./script/bundle-mac -d -i` when the user asks to install/update Zed Dev; use an optimized/release install, then verify the installed Zed Dev app is on the internal disk, codesigned, and its `Contents/MacOS/zed` binary is not the oversized debug binary.
+
+- Before reporting a task complete, run `git status --short` in every touched Zed worktree. Do not leave self-generated reports, logs, screenshots, or temporary artifacts untracked inside the repo; move them outside the repo or delete them unless the user explicitly asks to keep them in the worktree.

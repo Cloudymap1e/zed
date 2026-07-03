@@ -108,11 +108,11 @@ pub struct Extensions {
     pub id: Option<String>,
 }
 
-/// Opens the ACP registry.
+/// Opens the agent registry.
 #[derive(PartialEq, Clone, Default, Debug, Deserialize, JsonSchema, Action)]
 #[action(namespace = zed)]
 #[serde(deny_unknown_fields)]
-pub struct AcpRegistry;
+pub struct AgentRegistry;
 
 /// Show call diagnostics and connection quality statistics.
 #[derive(PartialEq, Clone, Default, Debug, Deserialize, JsonSchema, Action)]

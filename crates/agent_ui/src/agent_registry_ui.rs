@@ -574,7 +574,7 @@ impl Render for AgentRegistryPage {
                             .w_full()
                             .gap_1p5()
                             .justify_between()
-                            .child(Headline::new("ACP Registry").size(HeadlineSize::Large))
+                            .child(Headline::new("Agent Registry").size(HeadlineSize::Large))
                             .child(
                                 Button::new("learn-more", "Learn More")
                                     .style(ButtonStyle::Outlined)
@@ -585,7 +585,7 @@ impl Render for AgentRegistryPage {
                                             .color(Color::Muted),
                                     )
                                     .on_click(move |_, _, cx| {
-                                        cx.open_url(&zed_urls::acp_registry_blog(cx))
+                                        cx.open_url(&zed_urls::agent_registry_blog(cx))
                                     }),
                             ),
                     )
@@ -671,11 +671,11 @@ impl Item for AgentRegistryPage {
     type Event = ItemEvent;
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        "ACP Registry".into()
+        "Agent Registry".into()
     }
 
     fn telemetry_event_text(&self) -> Option<&'static str> {
-        Some("ACP Registry Page Opened")
+        Some("Agent Registry Page Opened")
     }
 
     fn show_toolbar(&self) -> bool {

@@ -1,7 +1,7 @@
 use crate::{AgentMessage, AgentMessageContent, UserMessage, UserMessageContent};
-use acp_thread::ClientUserMessageId;
-use agent_client_protocol::schema::v1 as acp;
 use agent_settings::AgentProfileId;
+use agent_thread::ClientUserMessageId;
+use agent_thread::protocol;
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use collections::{HashMap, IndexMap};
@@ -27,8 +27,8 @@ pub type DbLanguageModel = crate::legacy_thread::SerializedLanguageModel;
 
 #[derive(Debug, Clone)]
 pub struct DbThreadMetadata {
-    pub id: acp::SessionId,
-    pub parent_session_id: Option<acp::SessionId>,
+    pub id: protocol::SessionId,
+    pub parent_session_id: Option<protocol::SessionId>,
     pub title: SharedString,
     pub updated_at: DateTime<Utc>,
     pub created_at: Option<DateTime<Utc>>,
@@ -37,7 +37,7 @@ pub struct DbThreadMetadata {
     pub folder_paths: PathList,
 }
 
-impl From<&DbThreadMetadata> for acp_thread::AgentSessionInfo {
+impl From<&DbThreadMetadata> for agent_thread::AgentSessionInfo {
     fn from(meta: &DbThreadMetadata) -> Self {
         Self {
             session_id: meta.id.clone(),
@@ -62,7 +62,7 @@ pub struct DbThread {
     #[serde(default)]
     pub cumulative_token_usage: language_model::TokenUsage,
     #[serde(default)]
-    pub request_token_usage: HashMap<acp_thread::ClientUserMessageId, language_model::TokenUsage>,
+    pub request_token_usage: HashMap<agent_thread::ClientUserMessageId, language_model::TokenUsage>,
     #[serde(default)]
     pub model: Option<DbLanguageModel>,
     #[serde(default)]
@@ -76,7 +76,7 @@ pub struct DbThread {
     #[serde(default)]
     pub thinking_effort: Option<String>,
     #[serde(default)]
-    pub draft_prompt: Option<Vec<acp::ContentBlock>>,
+    pub draft_prompt: Option<Vec<protocol::ContentBlock>>,
     #[serde(default)]
     pub ui_scroll_position: Option<SerializedScrollPosition>,
     #[serde(default)]
@@ -482,7 +482,7 @@ impl ThreadsDatabase {
 
     fn save_thread_sync(
         connection: &Arc<Mutex<Connection>>,
-        id: acp::SessionId,
+        id: protocol::SessionId,
         thread: DbThread,
         folder_paths: &PathList,
     ) -> Result<()> {
@@ -585,8 +585,8 @@ impl ThreadsDatabase {
                     .map(|dt| dt.with_timezone(&Utc));
 
                 threads.push(DbThreadMetadata {
-                    id: acp::SessionId::new(id),
-                    parent_session_id: parent_id.map(acp::SessionId::new),
+                    id: protocol::SessionId::new(id),
+                    parent_session_id: parent_id.map(protocol::SessionId::new),
                     title: summary.into(),
                     updated_at: DateTime::parse_from_rfc3339(&updated_at)?.with_timezone(&Utc),
                     created_at,
@@ -598,7 +598,7 @@ impl ThreadsDatabase {
         })
     }
 
-    pub fn load_thread(&self, id: acp::SessionId) -> Task<Result<Option<DbThread>>> {
+    pub fn load_thread(&self, id: protocol::SessionId) -> Task<Result<Option<DbThread>>> {
         let connection = self.connection.clone();
 
         self.executor.spawn(async move {
@@ -618,7 +618,7 @@ impl ThreadsDatabase {
 
     pub fn save_thread(
         &self,
-        id: acp::SessionId,
+        id: protocol::SessionId,
         thread: DbThread,
         folder_paths: PathList,
     ) -> Task<Result<()>> {
@@ -662,7 +662,7 @@ impl ThreadsDatabase {
         }
     }
 
-    pub fn delete_thread(&self, id: acp::SessionId) -> Task<Result<()>> {
+    pub fn delete_thread(&self, id: protocol::SessionId) -> Task<Result<()>> {
         let connection = self.connection.clone();
 
         self.executor.spawn(async move {
@@ -777,8 +777,8 @@ mod tests {
         assert_eq!(restored.updated_at, original.updated_at);
     }
 
-    fn session_id(value: &str) -> acp::SessionId {
-        acp::SessionId::new(Arc::<str>::from(value))
+    fn session_id(value: &str) -> protocol::SessionId {
+        protocol::SessionId::new(Arc::<str>::from(value))
     }
 
     fn make_thread(title: &str, updated_at: DateTime<Utc>) -> DbThread {

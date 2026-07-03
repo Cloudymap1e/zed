@@ -1,6 +1,6 @@
 use crate::{AgentServer, AgentServerDelegate};
-use acp_thread::{AcpThread, AgentThreadEntry, ToolCall, ToolCallStatus};
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::protocol;
+use agent_thread::{AgentThread, AgentThreadEntry, ToolCall, ToolCallStatus};
 use client::RefreshLlmTokenListener;
 use futures::{FutureExt, StreamExt, channel::mpsc, select};
 use gpui::AppContext;
@@ -72,7 +72,9 @@ where
             thread.send(
                 vec![
                     "Read the file ".into(),
-                    acp::ContentBlock::ResourceLink(acp::ResourceLink::new("foo.rs", "foo.rs")),
+                    protocol::ContentBlock::ResourceLink(protocol::ResourceLink::new(
+                        "foo.rs", "foo.rs",
+                    )),
                     " and tell me what the content of the println! is".into(),
                 ],
                 cx,
@@ -154,7 +156,7 @@ where
 
 pub async fn test_tool_call_with_permission<T, F>(
     server: F,
-    allow_option_id: acp::PermissionOptionId,
+    allow_option_id: protocol::PermissionOptionId,
     cx: &mut TestAppContext,
 ) where
     T: AgentServer + 'static,
@@ -209,9 +211,9 @@ pub async fn test_tool_call_with_permission<T, F>(
     thread.update(cx, |thread, cx| {
         thread.authorize_tool_call(
             tool_call_id,
-            acp_thread::SelectedPermissionOutcome::new(
+            agent_thread::SelectedPermissionOutcome::new(
                 allow_option_id,
-                acp::PermissionOptionKind::AllowOnce,
+                protocol::PermissionOptionKind::AllowOnce,
             ),
             cx,
         );
@@ -379,7 +381,7 @@ macro_rules! common_e2e_tests {
             async fn tool_call_with_permission(cx: &mut ::gpui::TestAppContext) {
                 $crate::e2e_tests::test_tool_call_with_permission(
                     $server,
-                    ::agent_client_protocol::schema::v1::PermissionOptionId::new($allow_option_id),
+                    ::agent_thread::protocol::PermissionOptionId::new($allow_option_id),
                     cx,
                 )
                 .await;
@@ -434,7 +436,7 @@ pub async fn new_test_thread(
     project: Entity<Project>,
     current_dir: impl AsRef<Path>,
     cx: &mut TestAppContext,
-) -> Entity<AcpThread> {
+) -> Entity<AgentThread> {
     let store = project.read_with(cx, |project, _| project.agent_server_store().clone());
     let delegate = AgentServerDelegate::new(store, None, None);
 
@@ -451,7 +453,7 @@ pub async fn new_test_thread(
 }
 
 pub async fn run_until_first_tool_call(
-    thread: &Entity<AcpThread>,
+    thread: &Entity<AgentThread>,
     wait_until: impl Fn(&AgentThreadEntry) -> bool + 'static,
     cx: &mut TestAppContext,
 ) -> usize {

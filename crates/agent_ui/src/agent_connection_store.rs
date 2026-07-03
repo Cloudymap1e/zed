@@ -1,8 +1,8 @@
 use std::rc::Rc;
 
-use acp_thread::{AgentConnection, LoadError};
-use agent_servers::AcpConnection;
+use agent_servers::ExternalAgentConnection;
 use agent_servers::{AgentServer, AgentServerDelegate};
+use agent_thread::{AgentConnection, LoadError};
 use anyhow::Result;
 use collections::HashMap;
 use futures::{FutureExt, future::Shared};
@@ -61,9 +61,9 @@ pub enum AgentConnectionEntryEvent {
 impl EventEmitter<AgentConnectionEntryEvent> for AgentConnectionEntry {}
 
 #[derive(Clone)]
-pub struct ActiveAcpConnection {
+pub struct ActiveExternalAgentConnection {
     pub agent_id: project::AgentId,
-    pub connection: Rc<AcpConnection>,
+    pub connection: Rc<ExternalAgentConnection>,
 }
 
 pub struct AgentConnectionStore {
@@ -105,15 +105,18 @@ impl AgentConnectionStore {
         }
     }
 
-    pub fn active_acp_connections(&self, cx: &App) -> Vec<ActiveAcpConnection> {
+    pub fn active_external_agent_connections(
+        &self,
+        cx: &App,
+    ) -> Vec<ActiveExternalAgentConnection> {
         self.entries
             .values()
             .filter_map(|entry| match entry.read(cx) {
                 AgentConnectionEntry::Connected(state) => state
                     .connection
                     .clone()
-                    .downcast::<AcpConnection>()
-                    .map(|connection| ActiveAcpConnection {
+                    .downcast::<ExternalAgentConnection>()
+                    .map(|connection| ActiveExternalAgentConnection {
                         agent_id: state.connection.agent_id(),
                         connection,
                     }),
@@ -273,7 +276,6 @@ impl AgentConnectionStore {
     ) {
         let store = store.read(cx);
         self.entries.retain(|key, _| match key {
-            Agent::NativeAgent => true,
             Agent::Custom { id } => store.external_agents.contains_key(id),
             #[cfg(any(test, feature = "test-support"))]
             Agent::Stub => true,

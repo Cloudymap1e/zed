@@ -42,7 +42,7 @@ visual-tests = [
     "terminal_view/test-support",
     "image_viewer/test-support",
     "clock/test-support",
-    "acp_thread/test-support",
+    "agent_thread/test-support",
     "action_log/test-support",
     "agent_ui/test-support",
     "db/test-support",
@@ -63,10 +63,8 @@ path = "src/visual_test_runner.rs"
 required-features = ["visual-tests"]
 
 [dependencies]
-acp_tools.workspace = true
 activity_indicator.workspace = true
 agent.workspace = true
-agent-client-protocol.workspace = true
 agent_settings.workspace = true
 agent_skills.workspace = true
 agent_ui = { workspace = true, features = ["audio"] }
@@ -125,7 +123,7 @@ itertools.workspace = true
 semver.workspace = true
 tempfile = { workspace = true, optional = true }
 clock = { workspace = true, optional = true }
-acp_thread.workspace = true
+agent_thread.workspace = true
 action_log = { workspace = true, optional = true }
 agent_servers = { workspace = true, optional = true }
 gpui_tokio.workspace = true

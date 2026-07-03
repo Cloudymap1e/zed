@@ -2,7 +2,10 @@ use codestral::{CODESTRAL_API_URL, codestral_api_key_state, codestral_api_url};
 use edit_prediction::{
     ApiKeyState,
     mercury::{MERCURY_CREDENTIALS_URL, mercury_api_token},
-    open_ai_compatible::{open_ai_compatible_api_token, open_ai_compatible_api_url},
+    open_ai_compatible::{
+        CEREBRAS_API_URL, GROQ_API_URL, cerebras_api_token, cerebras_api_url, groq_api_token,
+        groq_api_url, open_ai_compatible_api_token, open_ai_compatible_api_url,
+    },
 };
 use edit_prediction_ui::{get_available_providers, set_completion_provider};
 use gpui::{App, Entity, ScrollHandle, TaskExt, prelude::*};
@@ -14,6 +17,7 @@ use workspace::AppState;
 
 const OLLAMA_API_URL_PLACEHOLDER: &str = "http://localhost:11434";
 const OLLAMA_MODEL_PLACEHOLDER: &str = "qwen2.5-coder:3b-base";
+const CUSTOM_PROVIDER_MODEL_PLACEHOLDER: &str = "model-id";
 
 use crate::{
     SettingField, SettingItem, SettingsFieldMetadata, SettingsPageItem, SettingsWindow, USER,
@@ -74,7 +78,9 @@ pub(crate) fn render_edit_prediction_setup_page(
                 IconName::AiOpenAiCompat,
                 "OpenAI Compatible API",
                 ApiKeyDocs::Custom {
-                    message: "The API key sent as Authorization: Bearer {key}.".into(),
+                    message:
+                        "The API key sent as Authorization: Bearer {key}. Environment variables may contain multiple keys separated by commas, semicolons, or newlines."
+                            .into(),
                 },
                 open_ai_compatible_api_token(cx),
                 |cx| open_ai_compatible_api_url(cx),
@@ -82,6 +88,58 @@ pub(crate) fn render_edit_prediction_setup_page(
                     settings_window
                         .render_sub_page_items_section(
                             open_ai_compatible_settings().iter().enumerate(),
+                            true,
+                            window,
+                            cx,
+                        )
+                        .into_any_element(),
+                ),
+                window,
+                cx,
+            )
+            .into_any_element(),
+        ),
+        Some(
+            render_api_key_provider(
+                IconName::AiOpenAiCompat,
+                "Groq",
+                ApiKeyDocs::Custom {
+                    message:
+                        "The API key sent as Authorization: Bearer {key}. Environment variables may contain multiple keys separated by commas, semicolons, or newlines."
+                            .into(),
+                },
+                groq_api_token(cx),
+                |cx| groq_api_url(cx),
+                Some(
+                    settings_window
+                        .render_sub_page_items_section(
+                            groq_settings().iter().enumerate(),
+                            true,
+                            window,
+                            cx,
+                        )
+                        .into_any_element(),
+                ),
+                window,
+                cx,
+            )
+            .into_any_element(),
+        ),
+        Some(
+            render_api_key_provider(
+                IconName::AiOpenAiCompat,
+                "Cerebras",
+                ApiKeyDocs::Custom {
+                    message:
+                        "The API key sent as Authorization: Bearer {key}. Environment variables may contain multiple keys separated by commas, semicolons, or newlines."
+                            .into(),
+                },
+                cerebras_api_token(cx),
+                |cx| cerebras_api_url(cx),
+                Some(
+                    settings_window
+                        .render_sub_page_items_section(
+                            cerebras_settings().iter().enumerate(),
                             true,
                             window,
                             cx,
@@ -623,6 +681,276 @@ fn open_ai_compatible_settings() -> Box<[SettingsPageItem]> {
                         .max_output_tokens = value;
                 },
                 json_path: Some("edit_predictions.open_ai_compatible_api.max_output_tokens"),
+            }),
+            metadata: None,
+            files: USER,
+        }),
+    ])
+}
+
+fn groq_settings() -> Box<[SettingsPageItem]> {
+    Box::new([
+        SettingsPageItem::SettingItem(SettingItem {
+            title: "API URL",
+            description: "The base URL of Groq's OpenAI-compatible API.",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .groq
+                        .as_ref()?
+                        .api_url
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .groq
+                        .get_or_insert_default()
+                        .api_url = value;
+                },
+                json_path: Some("edit_predictions.groq.api_url"),
+            }),
+            metadata: Some(Box::new(SettingsFieldMetadata {
+                placeholder: Some(GROQ_API_URL),
+                ..Default::default()
+            })),
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: "Model",
+            description: "The model string to pass to Groq.",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .groq
+                        .as_ref()?
+                        .model
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .groq
+                        .get_or_insert_default()
+                        .model = value;
+                },
+                json_path: Some("edit_predictions.groq.model"),
+            }),
+            metadata: Some(Box::new(SettingsFieldMetadata {
+                placeholder: Some(CUSTOM_PROVIDER_MODEL_PLACEHOLDER),
+                ..Default::default()
+            })),
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: "Prompt Format",
+            description: "The prompt format to use when requesting predictions. Set to Infer to have the format inferred based on the model name.",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .groq
+                        .as_ref()?
+                        .prompt_format
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .groq
+                        .get_or_insert_default()
+                        .prompt_format = value;
+                },
+                json_path: Some("edit_predictions.groq.prompt_format"),
+            }),
+            files: USER,
+            metadata: None,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: "Max Output Tokens",
+            description: "The maximum number of tokens to generate.",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .groq
+                        .as_ref()?
+                        .max_output_tokens
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .groq
+                        .get_or_insert_default()
+                        .max_output_tokens = value;
+                },
+                json_path: Some("edit_predictions.groq.max_output_tokens"),
+            }),
+            metadata: None,
+            files: USER,
+        }),
+    ])
+}
+
+fn cerebras_settings() -> Box<[SettingsPageItem]> {
+    Box::new([
+        SettingsPageItem::SettingItem(SettingItem {
+            title: "API URL",
+            description: "The base URL of Cerebras' OpenAI-compatible API.",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .cerebras
+                        .as_ref()?
+                        .api_url
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .cerebras
+                        .get_or_insert_default()
+                        .api_url = value;
+                },
+                json_path: Some("edit_predictions.cerebras.api_url"),
+            }),
+            metadata: Some(Box::new(SettingsFieldMetadata {
+                placeholder: Some(CEREBRAS_API_URL),
+                ..Default::default()
+            })),
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: "Model",
+            description: "The model string to pass to Cerebras.",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .cerebras
+                        .as_ref()?
+                        .model
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .cerebras
+                        .get_or_insert_default()
+                        .model = value;
+                },
+                json_path: Some("edit_predictions.cerebras.model"),
+            }),
+            metadata: Some(Box::new(SettingsFieldMetadata {
+                placeholder: Some(CUSTOM_PROVIDER_MODEL_PLACEHOLDER),
+                ..Default::default()
+            })),
+            files: USER,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: "Prompt Format",
+            description: "The prompt format to use when requesting predictions. Set to Infer to have the format inferred based on the model name.",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .cerebras
+                        .as_ref()?
+                        .prompt_format
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .cerebras
+                        .get_or_insert_default()
+                        .prompt_format = value;
+                },
+                json_path: Some("edit_predictions.cerebras.prompt_format"),
+            }),
+            files: USER,
+            metadata: None,
+        }),
+        SettingsPageItem::SettingItem(SettingItem {
+            title: "Max Output Tokens",
+            description: "The maximum number of tokens to generate.",
+            field: Box::new(SettingField {
+                organization_override: None,
+                pick: |settings| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .as_ref()?
+                        .cerebras
+                        .as_ref()?
+                        .max_output_tokens
+                        .as_ref()
+                },
+                write: |settings, value, _app: &App| {
+                    settings
+                        .project
+                        .all_languages
+                        .edit_predictions
+                        .get_or_insert_default()
+                        .cerebras
+                        .get_or_insert_default()
+                        .max_output_tokens = value;
+                },
+                json_path: Some("edit_predictions.cerebras.max_output_tokens"),
             }),
             metadata: None,
             files: USER,

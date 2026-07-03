@@ -710,7 +710,7 @@ mod tests {
     use futures::StreamExt as _;
     use gpui::{AppContext as _, Entity, Task, TestAppContext};
     use indoc::indoc;
-    use language::{ContextProvider, FakeLspAdapter};
+    use language::{ContextProvider, FakeLspAdapter, markdown_lang};
     use languages::rust_lang;
     use lsp::LanguageServerName;
     use multi_buffer::{MultiBuffer, PathKey};
@@ -1174,6 +1174,62 @@ mod tests {
         assert!(
             !labels.is_empty(),
             "Runnables should appear after the buffer is saved to disk"
+        );
+    }
+
+    #[gpui::test]
+    async fn test_no_runnables_in_markdown_code_fences(cx: &mut TestAppContext) {
+        init_test(cx, |_| {});
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            path!("/project"),
+            json!({
+                "README.md": indoc! {"
+                    ```rust
+                    #[test]
+                    fn test_one() {
+                        assert!(true);
+                    }
+
+                    fn main() {}
+                    ```
+                "},
+            }),
+        )
+        .await;
+
+        let project = Project::test(fs, [path!("/project").as_ref()], cx).await;
+        let language_registry = project.read_with(cx, |project, _| project.languages().clone());
+        language_registry.add(markdown_lang());
+        language_registry.add(rust_lang_with_task_context());
+
+        let buffer = project
+            .update(cx, |project, cx| {
+                project.open_local_buffer(path!("/project/README.md"), cx)
+            })
+            .await
+            .unwrap();
+        let multi_buffer = cx.new(|cx| MultiBuffer::singleton(buffer, cx));
+        let editor = cx.add_window(|window, cx| {
+            build_editor_with_project(project.clone(), multi_buffer, window, cx)
+        });
+
+        editor
+            .update(cx, |editor, window, cx| {
+                editor.refresh_runnables(None, window, cx);
+            })
+            .expect("editor update");
+        cx.executor().advance_clock(UPDATE_DEBOUNCE);
+        cx.executor().run_until_parked();
+
+        let labels = editor
+            .update(cx, |editor, _, _| collect_runnable_labels(editor))
+            .expect("editor update");
+        assert_eq!(
+            labels,
+            Vec::<(text::BufferId, language::BufferRow, Vec<String>)>::new(),
+            "Runnables should not appear for injected languages inside markdown code fences"
         );
     }
 

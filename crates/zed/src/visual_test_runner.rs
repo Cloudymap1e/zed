@@ -94,9 +94,9 @@ fn main() {
 // All macOS-specific imports grouped together
 #[cfg(target_os = "macos")]
 use {
-    acp_thread::{AgentConnection, StubAgentConnection},
-    agent_client_protocol::schema::v1 as acp,
     agent_servers::{AgentServer, AgentServerDelegate},
+    agent_thread::protocol,
+    agent_thread::{AgentConnection, StubAgentConnection},
     anyhow::{Context as _, Result},
     assets::Assets,
     editor::display_map::DisplayRow,
@@ -2087,11 +2087,11 @@ fn run_agent_thread_view_test(
     cx.run_until_parked();
 
     // Collect the events from the tool execution
-    let mut tool_content: Vec<acp::ToolCallContent> = Vec::new();
-    let mut tool_locations: Vec<acp::ToolCallLocation> = Vec::new();
+    let mut tool_content: Vec<protocol::ToolCallContent> = Vec::new();
+    let mut tool_locations: Vec<protocol::ToolCallLocation> = Vec::new();
 
     while let Ok(event) = event_receiver.try_recv() {
-        if let Ok(agent::ThreadEvent::ToolCallUpdate(acp_thread::ToolCallUpdate::UpdateFields(
+        if let Ok(agent::ThreadEvent::ToolCallUpdate(agent_thread::ToolCallUpdate::UpdateFields(
             update,
         ))) = event
         {
@@ -2110,13 +2110,13 @@ fn run_agent_thread_view_test(
 
     // Create stub connection with the real tool output
     let connection = StubAgentConnection::new();
-    connection.set_next_prompt_updates(vec![acp::SessionUpdate::ToolCall(
-        acp::ToolCall::new(
+    connection.set_next_prompt_updates(vec![protocol::SessionUpdate::ToolCall(
+        protocol::ToolCall::new(
             "read_file",
             format!("Read file `{}/test-image.png`", worktree_name),
         )
-        .kind(acp::ToolKind::Read)
-        .status(acp::ToolCallStatus::Completed)
+        .kind(protocol::ToolKind::Read)
+        .status(protocol::ToolCallStatus::Completed)
         .locations(tool_locations)
         .content(tool_content),
     )]);
@@ -2214,7 +2214,7 @@ fn run_agent_thread_view_test(
     let tool_call_id = cx
         .read(|cx| {
             thread.read(cx).entries().iter().find_map(|entry| {
-                if let acp_thread::AgentThreadEntry::ToolCall(tool_call) = entry {
+                if let agent_thread::AgentThreadEntry::ToolCall(tool_call) = entry {
                     Some(tool_call.id.clone())
                 } else {
                     None
@@ -2720,7 +2720,7 @@ fn run_multi_workspace_sidebar_visual_tests(
 
                 let task = thread_store.update(cx, |store, cx| {
                     store.save_thread(
-                        acp::SessionId::new(Arc::from(session_id)),
+                        protocol::SessionId::new(Arc::from(session_id)),
                         agent::DbThread {
                             title: title.to_string().into(),
                             messages: Vec::new(),

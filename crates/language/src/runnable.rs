@@ -64,6 +64,7 @@ pub(crate) fn runnable_ranges(
     buffer: &BufferSnapshot,
     offset_range: Range<usize>,
 ) -> impl Iterator<Item = RunnableRange> + '_ {
+    let root_language = buffer.language().map(|language| language.id());
     let mut syntax_matches = buffer.matches(offset_range.clone(), |grammar| {
         grammar.runnable_config.as_ref().map(|config| &config.query)
     });
@@ -75,43 +76,50 @@ pub(crate) fn runnable_ranges(
         .collect::<Vec<_>>();
 
     iter::from_fn(move || -> Option<SmallVec<[RunnableRange; 1]>> {
-        let mat = syntax_matches.peek()?;
+        loop {
+            let mat = syntax_matches.peek()?;
 
-        let ranges = match runnable_configs[mat.grammar_index] {
-            Some(runnable_config) => {
-                let is_grouped = runnable_config.supports_grouped_runnables
-                    && mat.captures.iter().any(|capture| {
-                        matches!(
-                            runnable_config.extra_captures.get(capture.index as usize),
-                            Some(RunnableCapture::RunItem)
-                        )
-                    });
-                if is_grouped {
-                    runnable_ranges_from_grouped_matches(
-                        buffer,
-                        mat.captures,
-                        runnable_config,
-                        mat.pattern_index,
-                        mat.language.clone(),
-                        offset_range.clone(),
-                    )
-                } else {
-                    runnable_range_from_captures(
-                        buffer,
-                        mat.captures,
-                        runnable_config,
-                        mat.pattern_index,
-                        mat.language,
-                    )
-                    .into_iter()
-                    .collect()
-                }
+            if Some(mat.language.id()) != root_language {
+                syntax_matches.advance();
+                continue;
             }
-            None => SmallVec::new(),
-        };
 
-        syntax_matches.advance();
-        Some(ranges)
+            let ranges = match runnable_configs[mat.grammar_index] {
+                Some(runnable_config) => {
+                    let is_grouped = runnable_config.supports_grouped_runnables
+                        && mat.captures.iter().any(|capture| {
+                            matches!(
+                                runnable_config.extra_captures.get(capture.index as usize),
+                                Some(RunnableCapture::RunItem)
+                            )
+                        });
+                    if is_grouped {
+                        runnable_ranges_from_grouped_matches(
+                            buffer,
+                            mat.captures,
+                            runnable_config,
+                            mat.pattern_index,
+                            mat.language.clone(),
+                            offset_range.clone(),
+                        )
+                    } else {
+                        runnable_range_from_captures(
+                            buffer,
+                            mat.captures,
+                            runnable_config,
+                            mat.pattern_index,
+                            mat.language,
+                        )
+                        .into_iter()
+                        .collect()
+                    }
+                }
+                None => SmallVec::new(),
+            };
+
+            syntax_matches.advance();
+            return Some(ranges);
+        }
     })
     .flatten()
 }

@@ -179,6 +179,34 @@ impl futures::Stream for StreamReader {
     }
 }
 
+struct TokioRuntimeReader {
+    handle: tokio::runtime::Handle,
+    reader: Pin<Box<dyn futures::AsyncRead + Send + Sync>>,
+}
+
+impl TokioRuntimeReader {
+    fn new(
+        handle: tokio::runtime::Handle,
+        reader: impl futures::AsyncRead + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            handle,
+            reader: Box::pin(reader),
+        }
+    }
+}
+
+impl futures::AsyncRead for TokioRuntimeReader {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let _guard = self.handle.enter();
+        self.reader.as_mut().poll_read(cx, buf)
+    }
+}
+
 /// Implementation from <https://docs.rs/tokio-util/0.7.12/src/tokio_util/util/poll_buf.rs.html>
 /// Specialized for this use case
 fn poll_read_buf(
@@ -280,7 +308,7 @@ impl http_client::HttpClient for ReqwestClient {
                 .bytes_stream()
                 .map_err(futures::io::Error::other)
                 .into_async_read();
-            let body = http_client::AsyncBody::from_reader(bytes);
+            let body = http_client::AsyncBody::from_reader(TokioRuntimeReader::new(handle, bytes));
 
             builder.body(body).map_err(|e| anyhow!(e))
         }

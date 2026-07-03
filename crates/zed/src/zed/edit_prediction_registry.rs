@@ -120,12 +120,14 @@ fn edit_prediction_provider_config_for_settings(cx: &App) -> Option<EditPredicti
             Some(EditPredictionProviderConfig::Zed(EditPredictionModel::Zeta))
         }
         EditPredictionProvider::Codestral => Some(EditPredictionProviderConfig::Codestral),
-        EditPredictionProvider::Ollama | EditPredictionProvider::OpenAiCompatibleApi => {
-            let custom_settings = if provider == EditPredictionProvider::Ollama {
-                settings.ollama.as_ref()?
-            } else {
-                settings.open_ai_compatible_api.as_ref()?
-            };
+        EditPredictionProvider::Ollama
+        | EditPredictionProvider::OpenAiCompatibleApi
+        | EditPredictionProvider::Groq
+        | EditPredictionProvider::Cerebras => {
+            let custom_settings =
+                edit_prediction::open_ai_compatible::custom_settings_for_provider(
+                    settings, provider,
+                )?;
 
             let mut format = custom_settings.prompt_format;
             if format == EditPredictionPromptFormat::Infer {
@@ -153,22 +155,34 @@ fn edit_prediction_provider_config_for_settings(cx: &App) -> Option<EditPredicti
 }
 
 fn infer_prompt_format(model: &str) -> Option<EditPredictionPromptFormat> {
-    let model_base = model.split(':').next().unwrap_or(model);
+    let model_without_tag = model
+        .split(':')
+        .next()
+        .unwrap_or(model)
+        .to_ascii_lowercase();
 
-    Some(match model_base {
-        "zeta2" => EditPredictionPromptFormat::Zeta(ZetaVersion::Zeta2),
-        "zeta2.1" => EditPredictionPromptFormat::Zeta(ZetaVersion::Zeta2_1),
-        "codellama" | "code-llama" => EditPredictionPromptFormat::CodeLlama,
-        "starcoder" | "starcoder2" | "starcoderbase" => EditPredictionPromptFormat::StarCoder,
-        "deepseek-coder" | "deepseek-coder-v2" => EditPredictionPromptFormat::DeepseekCoder,
-        "qwen2.5-coder" | "qwen-coder" | "qwen" => EditPredictionPromptFormat::Qwen,
-        "codegemma" => EditPredictionPromptFormat::CodeGemma,
-        "codestral" | "mistral" => EditPredictionPromptFormat::Codestral,
-        "glm" | "glm-4" | "glm-4.5" => EditPredictionPromptFormat::Glm,
-        _ => {
-            return None;
-        }
-    })
+    for model_part in std::iter::once(model_without_tag.as_str())
+        .chain(model_without_tag.split('/'))
+        .filter(|part| !part.is_empty())
+    {
+        let format = match model_part {
+            "zeta2" => EditPredictionPromptFormat::Zeta(ZetaVersion::Zeta2),
+            "zeta2.1" => EditPredictionPromptFormat::Zeta(ZetaVersion::Zeta2_1),
+            "codellama" | "code-llama" => EditPredictionPromptFormat::CodeLlama,
+            "starcoder" | "starcoder2" | "starcoderbase" => EditPredictionPromptFormat::StarCoder,
+            "deepseek-coder" | "deepseek-coder-v2" => EditPredictionPromptFormat::DeepseekCoder,
+            "qwen2.5-coder" | "qwen-coder" | "qwen" => EditPredictionPromptFormat::Qwen,
+            "codegemma" => EditPredictionPromptFormat::CodeGemma,
+            "codestral" | "mistral" => EditPredictionPromptFormat::Codestral,
+            "glm" | "glm-4" | "glm-4.5" => EditPredictionPromptFormat::Glm,
+            _ if model_part.starts_with("qwen") => EditPredictionPromptFormat::Qwen,
+            _ if model_part.starts_with("glm") => EditPredictionPromptFormat::Glm,
+            _ => continue,
+        };
+        return Some(format);
+    }
+
+    None
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -320,6 +334,71 @@ mod tests {
     use gpui::{BorrowAppContext, TestAppContext};
     use settings::{EditPredictionProvider, SettingsStore};
     use workspace::AppState;
+
+    #[test]
+    fn test_infer_prompt_format_handles_provider_slash_model_ids() {
+        assert_eq!(
+            infer_prompt_format("qwen/qwen3-32b"),
+            Some(EditPredictionPromptFormat::Qwen)
+        );
+        assert_eq!(
+            infer_prompt_format("deepseek-ai/deepseek-coder-v2:latest"),
+            Some(EditPredictionPromptFormat::DeepseekCoder)
+        );
+        assert_eq!(infer_prompt_format("unknown/model"), None);
+    }
+
+    #[gpui::test]
+    fn test_open_ai_compatible_presets_use_fim_provider_config(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            AppState::test(cx);
+        });
+
+        for provider in [
+            EditPredictionProvider::Groq,
+            EditPredictionProvider::Cerebras,
+        ] {
+            cx.update(|cx| {
+                cx.update_global::<SettingsStore, _>(|store: &mut SettingsStore, cx| {
+                    store.update_user_settings(cx, |settings| {
+                        let custom_provider_settings =
+                            settings::CustomEditPredictionProviderSettingsContent {
+                                api_url: Some("https://example.test/v1".into()),
+                                model: Some("autocomplete-model".into()),
+                                prompt_format: Some(EditPredictionPromptFormat::Qwen),
+                                max_output_tokens: Some(64),
+                            };
+                        let mut edit_predictions = settings::EditPredictionSettingsContent {
+                            provider: Some(provider),
+                            ..Default::default()
+                        };
+
+                        match provider {
+                            EditPredictionProvider::Groq => {
+                                edit_predictions.groq = Some(custom_provider_settings)
+                            }
+                            EditPredictionProvider::Cerebras => {
+                                edit_predictions.cerebras = Some(custom_provider_settings)
+                            }
+                            _ => {}
+                        }
+
+                        settings.project.all_languages.edit_predictions = Some(edit_predictions);
+                    });
+                });
+            });
+
+            let config = cx.update(|cx| edit_prediction_provider_config_for_settings(cx));
+            assert!(matches!(
+                config,
+                Some(EditPredictionProviderConfig::Zed(
+                    EditPredictionModel::Fim {
+                        format: EditPredictionPromptFormat::Qwen
+                    }
+                ))
+            ));
+        }
+    }
 
     #[gpui::test]
     async fn test_subscribe_uses_stale_provider_config_after_settings_change(

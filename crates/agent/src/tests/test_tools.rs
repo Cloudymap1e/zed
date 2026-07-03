@@ -41,8 +41,8 @@ impl AgentTool for StreamingEchoTool {
         true
     }
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Other
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Other
     }
 
     fn initial_title(
@@ -88,8 +88,8 @@ impl AgentTool for StreamingJsonErrorContextTool {
         true
     }
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Other
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Other
     }
 
     fn initial_title(
@@ -152,8 +152,8 @@ impl AgentTool for StreamingFailingEchoTool {
 
     const NAME: &'static str = "streaming_failing_echo";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Other
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Other
     }
 
     fn supports_input_streaming() -> bool {
@@ -198,8 +198,8 @@ impl AgentTool for EchoTool {
 
     const NAME: &'static str = "echo";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Other
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Other
     }
 
     fn initial_title(
@@ -250,8 +250,8 @@ impl AgentTool for DelayTool {
         }
     }
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Other
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Other
     }
 
     fn run(
@@ -283,8 +283,8 @@ impl AgentTool for ToolRequiringPermission {
 
     const NAME: &'static str = "tool_requiring_permission";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Other
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Other
     }
 
     fn initial_title(
@@ -328,8 +328,8 @@ impl AgentTool for ToolRequiringPermission2 {
 
     const NAME: &'static str = "tool_requiring_permission_2";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Other
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Other
     }
 
     fn initial_title(
@@ -370,8 +370,8 @@ impl AgentTool for InfiniteTool {
 
     const NAME: &'static str = "infinite";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Other
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Other
     }
 
     fn initial_title(
@@ -423,8 +423,8 @@ impl AgentTool for CancellationAwareTool {
 
     const NAME: &'static str = "cancellation_aware";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Other
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Other
     }
 
     fn initial_title(
@@ -479,8 +479,8 @@ impl AgentTool for WordListTool {
 
     const NAME: &'static str = "word_list";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Other
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Other
     }
 
     fn initial_title(

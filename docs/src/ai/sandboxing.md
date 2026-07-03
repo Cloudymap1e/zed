@@ -1,11 +1,11 @@
 ---
 title: Sandboxing
-description: Zed Agent tool calls can run in an OS-level sandbox to restrict certain operations.
+description: Zed-managed tool calls can run in an OS-level sandbox to restrict certain operations.
 ---
 
 # Sandboxing
 
-You can restrict what operations the [Zed Agent](./zed-agent.md) can run in multiple ways. One way to restrict them is
+You can restrict what operations Zed-managed tool calls can run in multiple ways. One way to restrict them is
 [Tool Permissions](./tool-permissions.md), but these are of limited use when the agent wants to do things like run a
 complicated script in a terminal.
 
@@ -18,12 +18,12 @@ script will only be able to write to the files and folders you have allowed it t
 - Tool permissions restrict the agent's ability to run certain tool actions in the first place
 - Once a tool action is actually running, sandboxing restricts what it can do
 
-Sandboxing applies only to Zed Agent. It does not sandbox Zed itself, language servers, extensions, tasks, your normal
+Sandboxing applies only to Zed-managed agent tool calls. It does not sandbox Zed itself, language servers, extensions, tasks, your normal
 terminal tabs, [External Agents](./external-agents.md), or [Terminal Threads](./terminal-threads.md).
 
 ## Sandboxed Tools {#sandboxed-tools}
 
-Zed Agent sandboxing currently applies to the `terminal` tool.
+Agent sandboxing currently applies to the `terminal` tool.
 
 | Tool       | What sandboxing limits                                                                                |
 | ---------- | ----------------------------------------------------------------------------------------------------- |
@@ -34,7 +34,7 @@ Other built-in tools, including `fetch`, are still governed by [Tool Permissions
 
 ## Default Access {#default-access}
 
-By default, sandboxed Zed Agent tool actions have these restrictions:
+By default, sandboxed tool actions have these restrictions:
 
 | Access type         | Default behavior                                                                                                                                                    |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -153,11 +153,11 @@ sandbox and show a warning in the tool output.
 
 ### Windows {#windows}
 
-On Windows, Zed Agent sandboxing is supported only when the agent action runs inside WSL.
+On Windows, agent sandboxing is supported only when the action runs inside WSL.
 
 Zed uses the Linux Bubblewrap sandbox inside WSL because WSL provides the Linux process and filesystem primitives that
 Bubblewrap needs. Native Windows processes do not currently have the same sandbox integration in Zed, so a native Windows
-command cannot be confined by Zed Agent's OS sandbox in the same way.
+command cannot be confined by Zed's OS sandbox in the same way.
 
 When running inside WSL, the Linux sandboxing behavior applies, including the requirement that `bwrap` not be setuid-root:
 

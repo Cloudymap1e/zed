@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v1 as acp;
+use agent_thread::protocol;
 use anyhow::Result;
 use futures::FutureExt as _;
 use gpui::{App, AsyncApp, Entity, SharedString, Task};
@@ -289,8 +289,8 @@ impl AgentTool for TerminalTool {
 
     const NAME: &'static str = "terminal";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Execute
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Execute
     }
 
     fn allow_in_restricted_mode() -> bool {
@@ -331,8 +331,8 @@ impl AgentTool for SandboxedTerminalTool {
 
     const NAME: &'static str = "sandboxed_terminal";
 
-    fn kind() -> acp::ToolKind {
-        acp::ToolKind::Execute
+    fn kind() -> protocol::ToolKind {
+        protocol::ToolKind::Execute
     }
 
     fn allow_in_restricted_mode() -> bool {
@@ -615,7 +615,7 @@ async fn run_terminal_tool(
         not(any(target_os = "macos", target_os = "linux", target_os = "windows")),
         allow(unused_mut)
     )]
-    let mut sandbox_not_applied: Option<acp_thread::SandboxNotAppliedReason> = None;
+    let mut sandbox_not_applied: Option<agent_thread::SandboxNotAppliedReason> = None;
 
     let sandbox_wrap = if sandboxing && !want_unsandboxed {
         if unsandboxed_floor {
@@ -623,7 +623,8 @@ async fn run_terminal_tool(
             // approved it — a model-requested "run unsandboxed" escape granted
             // for the thread, or the sandbox-creation fallback after a failure.
             // Record why so the model is told it ran without isolation.
-            sandbox_not_applied = Some(acp_thread::SandboxNotAppliedReason::DisabledForThisThread);
+            sandbox_not_applied =
+                Some(agent_thread::SandboxNotAppliedReason::DisabledForThisThread);
             None
         } else {
             let effective = event_stream.effective_sandbox_request(&request, &persistent);
@@ -639,7 +640,7 @@ async fn run_terminal_tool(
                     sandbox_git_dirs(project.read(cx), cx),
                 )
             });
-            let wrap = acp_thread::SandboxWrap {
+            let wrap = agent_thread::SandboxWrap {
                 writable_paths,
                 extra_write_paths: effective.write_paths,
                 protected_paths,
@@ -695,7 +696,7 @@ async fn run_terminal_tool(
                         }
                         Ok(SandboxFallbackDecision::RunUnsandboxed) => {
                             sandbox_not_applied =
-                                Some(acp_thread::SandboxNotAppliedReason::ErrorLinuxWsl(error));
+                                Some(agent_thread::SandboxNotAppliedReason::ErrorLinuxWsl(error));
                             break None;
                         }
                         Ok(SandboxFallbackDecision::Deny) | Err(_) => {
@@ -780,7 +781,7 @@ async fn run_terminal_tool(
             }) else {
                 return Err(format!("{error:#}"));
             };
-            let sandbox_error = acp_thread::LinuxWslSandboxError::Other(message);
+            let sandbox_error = agent_thread::LinuxWslSandboxError::Other(message);
             log::warn!("Failed to create a WSL sandbox for an agent terminal command: {error:?}");
 
             let decision = cx
@@ -800,9 +801,9 @@ async fn run_terminal_tool(
                     retries += 1;
                 }
                 Ok(SandboxFallbackDecision::RunUnsandboxed) => {
-                    sandbox_not_applied = Some(acp_thread::SandboxNotAppliedReason::ErrorLinuxWsl(
-                        sandbox_error,
-                    ));
+                    sandbox_not_applied = Some(
+                        agent_thread::SandboxNotAppliedReason::ErrorLinuxWsl(sandbox_error),
+                    );
                     effective_wrap = None;
                 }
                 Ok(SandboxFallbackDecision::Deny) | Err(_) => {
@@ -838,12 +839,12 @@ async fn run_terminal_tool(
         // platforms the note is returned exactly as built.
         #[cfg_attr(not(target_os = "windows"), allow(unused_mut))]
         let mut note = match reason {
-            acp_thread::SandboxNotAppliedReason::DisabledForThisThread => {
+            agent_thread::SandboxNotAppliedReason::DisabledForThisThread => {
                 "Note: this command ran WITHOUT an OS sandbox because the user allowed unsandboxed \
                  execution for the rest of this thread."
                     .to_string()
             }
-            acp_thread::SandboxNotAppliedReason::ErrorLinuxWsl(error) => format!(
+            agent_thread::SandboxNotAppliedReason::ErrorLinuxWsl(error) => format!(
                 "Note: this command ran WITHOUT an OS sandbox because one could not be \
                  created ({}).",
                 error.user_facing_message()
@@ -871,13 +872,14 @@ async fn run_terminal_tool(
     });
 
     let terminal_id = terminal.id(cx).map_err(|e| e.to_string())?;
-    let fields = acp::ToolCallUpdateFields::new().content(vec![acp::ToolCallContent::Terminal(
-        acp::Terminal::new(terminal_id),
-    )]);
+    let fields =
+        protocol::ToolCallUpdateFields::new().content(vec![protocol::ToolCallContent::Terminal(
+            protocol::Terminal::new(terminal_id),
+        )]);
     if let Some(reason) = &sandbox_not_applied {
         event_stream.update_fields_with_meta(
             fields,
-            Some(acp_thread::meta_with_sandbox_not_applied(reason)),
+            Some(agent_thread::meta_with_sandbox_not_applied(reason)),
         );
     } else {
         event_stream.update_fields(fields);
@@ -1032,21 +1034,21 @@ fn wsl_absolute_path(raw: &str) -> Option<PathBuf> {
 /// terminal sandbox.
 fn network_request_to_sandbox_network_access(
     network: &NetworkRequest,
-) -> acp_thread::SandboxNetworkAccess {
+) -> agent_thread::SandboxNetworkAccess {
     match network {
-        NetworkRequest::None => acp_thread::SandboxNetworkAccess::None,
-        NetworkRequest::AnyHost => acp_thread::SandboxNetworkAccess::All,
+        NetworkRequest::None => agent_thread::SandboxNetworkAccess::None,
+        NetworkRequest::AnyHost => agent_thread::SandboxNetworkAccess::All,
         NetworkRequest::Hosts(hosts) => {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             {
-                acp_thread::SandboxNetworkAccess::Restricted(http_proxy::Allowlist::from_patterns(
-                    hosts.iter().cloned(),
-                ))
+                agent_thread::SandboxNetworkAccess::Restricted(
+                    http_proxy::Allowlist::from_patterns(hosts.iter().cloned()),
+                )
             }
             #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             {
                 let _ = hosts;
-                acp_thread::SandboxNetworkAccess::None
+                agent_thread::SandboxNetworkAccess::None
             }
         }
     }
@@ -1137,7 +1139,7 @@ fn wsl_interop_blocked(content: &str) -> bool {
 }
 
 fn process_content(
-    output: acp::TerminalOutputResponse,
+    output: protocol::TerminalOutputResponse,
     command: &str,
     timed_out: bool,
     user_stopped: bool,
@@ -1298,7 +1300,7 @@ mod tests {
 
     #[test]
     fn test_process_content_user_stopped() {
-        let output = acp::TerminalOutputResponse::new("partial output".to_string(), false);
+        let output = protocol::TerminalOutputResponse::new("partial output".to_string(), false);
 
         let result = process_content(
             output,
@@ -1534,8 +1536,9 @@ mod tests {
 
     #[test]
     fn test_process_content_filters_success_output_for_model() {
-        let output = acp::TerminalOutputResponse::new("one\ntwo\nthree\nfour".to_string(), false)
-            .exit_status(acp::TerminalExitStatus::new().exit_code(0));
+        let output =
+            protocol::TerminalOutputResponse::new("one\ntwo\nthree\nfour".to_string(), false)
+                .exit_status(protocol::TerminalExitStatus::new().exit_code(0));
 
         let result = process_content(
             output,
@@ -1553,8 +1556,8 @@ mod tests {
 
     #[test]
     fn test_process_content_filters_failure_output_for_model() {
-        let output = acp::TerminalOutputResponse::new("one\ntwo\nthree".to_string(), false)
-            .exit_status(acp::TerminalExitStatus::new().exit_code(1));
+        let output = protocol::TerminalOutputResponse::new("one\ntwo\nthree".to_string(), false)
+            .exit_status(protocol::TerminalExitStatus::new().exit_code(1));
 
         let result = process_content(
             output,
@@ -1575,7 +1578,7 @@ mod tests {
 
     #[test]
     fn test_process_content_filters_timeout_output_for_model() {
-        let output = acp::TerminalOutputResponse::new("one\ntwo\nthree".to_string(), false);
+        let output = protocol::TerminalOutputResponse::new("one\ntwo\nthree".to_string(), false);
 
         let result = process_content(
             output,
@@ -1596,7 +1599,7 @@ mod tests {
 
     #[test]
     fn test_process_content_filters_user_stopped_output_for_model() {
-        let output = acp::TerminalOutputResponse::new("one\ntwo\nthree".to_string(), false);
+        let output = protocol::TerminalOutputResponse::new("one\ntwo\nthree".to_string(), false);
 
         let result = process_content(
             output,
@@ -1618,8 +1621,8 @@ mod tests {
 
     #[test]
     fn test_process_content_selected_output_has_no_explanatory_note() {
-        let output = acp::TerminalOutputResponse::new("one\ntwo\nthree".to_string(), false)
-            .exit_status(acp::TerminalExitStatus::new().exit_code(0));
+        let output = protocol::TerminalOutputResponse::new("one\ntwo\nthree".to_string(), false)
+            .exit_status(protocol::TerminalExitStatus::new().exit_code(0));
 
         let result = process_content(
             output,
@@ -1639,7 +1642,7 @@ mod tests {
 
     #[test]
     fn test_process_content_user_stopped_empty_output() {
-        let output = acp::TerminalOutputResponse::new("".to_string(), false);
+        let output = protocol::TerminalOutputResponse::new("".to_string(), false);
 
         let result = process_content(
             output,
@@ -1663,7 +1666,7 @@ mod tests {
 
     #[test]
     fn test_process_content_timed_out() {
-        let output = acp::TerminalOutputResponse::new("build output here".to_string(), false);
+        let output = protocol::TerminalOutputResponse::new("build output here".to_string(), false);
 
         let result = process_content(
             output,
@@ -1687,7 +1690,7 @@ mod tests {
 
     #[test]
     fn test_process_content_timed_out_with_empty_output() {
-        let output = acp::TerminalOutputResponse::new("".to_string(), false);
+        let output = protocol::TerminalOutputResponse::new("".to_string(), false);
 
         let result = process_content(
             output,
@@ -1711,8 +1714,8 @@ mod tests {
 
     #[test]
     fn test_process_content_with_success() {
-        let output = acp::TerminalOutputResponse::new("success output".to_string(), false)
-            .exit_status(acp::TerminalExitStatus::new().exit_code(0));
+        let output = protocol::TerminalOutputResponse::new("success output".to_string(), false)
+            .exit_status(protocol::TerminalExitStatus::new().exit_code(0));
 
         let result = process_content(
             output,
@@ -1736,8 +1739,8 @@ mod tests {
 
     #[test]
     fn test_process_content_with_success_empty_output() {
-        let output = acp::TerminalOutputResponse::new("".to_string(), false)
-            .exit_status(acp::TerminalExitStatus::new().exit_code(0));
+        let output = protocol::TerminalOutputResponse::new("".to_string(), false)
+            .exit_status(protocol::TerminalExitStatus::new().exit_code(0));
 
         let result = process_content(
             output,
@@ -1756,8 +1759,8 @@ mod tests {
 
     #[test]
     fn test_process_content_with_error_exit() {
-        let output = acp::TerminalOutputResponse::new("error output".to_string(), false)
-            .exit_status(acp::TerminalExitStatus::new().exit_code(1));
+        let output = protocol::TerminalOutputResponse::new("error output".to_string(), false)
+            .exit_status(protocol::TerminalExitStatus::new().exit_code(1));
 
         let result = process_content(
             output,
@@ -1781,8 +1784,8 @@ mod tests {
 
     #[test]
     fn test_process_content_with_error_exit_empty_output() {
-        let output = acp::TerminalOutputResponse::new("".to_string(), false)
-            .exit_status(acp::TerminalExitStatus::new().exit_code(1));
+        let output = protocol::TerminalOutputResponse::new("".to_string(), false)
+            .exit_status(protocol::TerminalExitStatus::new().exit_code(1));
 
         let result = process_content(
             output,
@@ -1801,7 +1804,7 @@ mod tests {
 
     #[test]
     fn test_process_content_unexpected_termination() {
-        let output = acp::TerminalOutputResponse::new("some output".to_string(), false);
+        let output = protocol::TerminalOutputResponse::new("some output".to_string(), false);
 
         let result = process_content(
             output,
@@ -1825,7 +1828,7 @@ mod tests {
 
     #[test]
     fn test_process_content_unexpected_termination_empty_output() {
-        let output = acp::TerminalOutputResponse::new("".to_string(), false);
+        let output = protocol::TerminalOutputResponse::new("".to_string(), false);
 
         let result = process_content(
             output,
@@ -1907,7 +1910,7 @@ mod tests {
             !matches!(
                 rx.try_recv(),
                 Ok(Ok(crate::ThreadEvent::ToolCallUpdate(
-                    acp_thread::ToolCallUpdate::UpdateFields(_)
+                    agent_thread::ToolCallUpdate::UpdateFields(_)
                 )))
             ),
             "invalid command should not emit a terminal card update"
@@ -1959,7 +1962,7 @@ mod tests {
             update.content.iter().any(|blocks| {
                 blocks
                     .iter()
-                    .any(|content| matches!(content, acp::ToolCallContent::Terminal(_)))
+                    .any(|content| matches!(content, protocol::ToolCallContent::Terminal(_)))
             }),
             "expected terminal content update in unconditional allow-all mode"
         );
@@ -2091,7 +2094,7 @@ mod tests {
             update.content.iter().any(|blocks| {
                 blocks
                     .iter()
-                    .any(|content| matches!(content, acp::ToolCallContent::Terminal(_)))
+                    .any(|content| matches!(content, protocol::ToolCallContent::Terminal(_)))
             }),
             "expected terminal content update for matching env-prefixed allow rule"
         );
@@ -2120,8 +2123,8 @@ mod tests {
         let project = project::Project::test(fs, ["/root".as_ref()], cx).await;
 
         let output =
-            acp::TerminalOutputResponse::new("one\ntwo\nthree\nfour\nfive".to_string(), false)
-                .exit_status(acp::TerminalExitStatus::new().exit_code(0));
+            protocol::TerminalOutputResponse::new("one\ntwo\nthree\nfour\nfive".to_string(), false)
+                .exit_status(protocol::TerminalExitStatus::new().exit_code(0));
         let environment = std::rc::Rc::new(cx.update(|cx| {
             crate::tests::FakeThreadEnvironment::default().with_terminal(
                 crate::tests::FakeTerminalHandle::new_with_immediate_exit(cx, 0)
@@ -2159,7 +2162,7 @@ mod tests {
             update.content.iter().any(|blocks| {
                 blocks
                     .iter()
-                    .any(|content| matches!(content, acp::ToolCallContent::Terminal(_)))
+                    .any(|content| matches!(content, protocol::ToolCallContent::Terminal(_)))
             }),
             "expected terminal content update"
         );
@@ -2179,8 +2182,8 @@ mod tests {
         fs.insert_tree("/root", serde_json::json!({})).await;
         let project = project::Project::test(fs, ["/root".as_ref()], cx).await;
 
-        let output = acp::TerminalOutputResponse::new("command output".to_string(), false)
-            .exit_status(acp::TerminalExitStatus::new().exit_code(0));
+        let output = protocol::TerminalOutputResponse::new("command output".to_string(), false)
+            .exit_status(protocol::TerminalExitStatus::new().exit_code(0));
         let environment = std::rc::Rc::new(cx.update(|cx| {
             crate::tests::FakeThreadEnvironment::default().with_terminal(
                 crate::tests::FakeTerminalHandle::new_with_immediate_exit(cx, 0)
@@ -2579,7 +2582,7 @@ mod tests {
             update.content.iter().any(|blocks| {
                 blocks
                     .iter()
-                    .any(|content| matches!(content, acp::ToolCallContent::Terminal(_)))
+                    .any(|content| matches!(content, protocol::ToolCallContent::Terminal(_)))
             }),
             "terminal-specific allow-all should bypass substitution rejection"
         );
@@ -2719,7 +2722,7 @@ mod tests {
             update.content.iter().any(|blocks| {
                 blocks
                     .iter()
-                    .any(|content| matches!(content, acp::ToolCallContent::Terminal(_)))
+                    .any(|content| matches!(content, protocol::ToolCallContent::Terminal(_)))
             }),
             "multi-assignment pattern should match and produce terminal content"
         );
@@ -2797,7 +2800,7 @@ mod tests {
             update.content.iter().any(|blocks| {
                 blocks
                     .iter()
-                    .any(|content| matches!(content, acp::ToolCallContent::Terminal(_)))
+                    .any(|content| matches!(content, protocol::ToolCallContent::Terminal(_)))
             }),
             "quoted whitespace value should match pattern with quoted form"
         );
@@ -3027,7 +3030,7 @@ mod tests {
 
         let authorization = receiver.expect_authorization().await;
         let details =
-            acp_thread::sandbox_authorization_details_from_meta(&authorization.tool_call.meta)
+            agent_thread::sandbox_authorization_details_from_meta(&authorization.tool_call.meta)
                 .expect("legacy allow_fs_write should request sandbox authorization details");
         assert!(details.network_hosts.is_empty());
         assert!(!details.network_all_hosts);
@@ -3035,7 +3038,7 @@ mod tests {
         assert!(!details.unsandboxed);
         assert!(details.write_paths.is_empty());
 
-        let acp_thread::PermissionOptions::Flat(options) = &authorization.options else {
+        let agent_thread::PermissionOptions::Flat(options) = &authorization.options else {
             panic!("expected flat sandbox permission options");
         };
         let options = options
@@ -3051,26 +3054,30 @@ mod tests {
         assert_eq!(
             options,
             vec![
-                ("allow", "Allow once", acp::PermissionOptionKind::AllowOnce),
+                (
+                    "allow",
+                    "Allow once",
+                    protocol::PermissionOptionKind::AllowOnce
+                ),
                 (
                     "allow_thread",
                     "Allow for this thread",
-                    acp::PermissionOptionKind::AllowAlways,
+                    protocol::PermissionOptionKind::AllowAlways,
                 ),
                 (
                     "allow_always",
                     "Allow always",
-                    acp::PermissionOptionKind::AllowAlways,
+                    protocol::PermissionOptionKind::AllowAlways,
                 ),
-                ("deny", "Deny", acp::PermissionOptionKind::RejectOnce),
+                ("deny", "Deny", protocol::PermissionOptionKind::RejectOnce),
             ]
         );
 
         authorization
             .response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("deny"),
-                acp::PermissionOptionKind::RejectOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("deny"),
+                protocol::PermissionOptionKind::RejectOnce,
             ))
             .expect("authorization response should send");
 
@@ -3124,7 +3131,7 @@ mod tests {
         // so the card keeps showing the command being approved.
         assert_eq!(authorization.tool_call.fields.title, None);
         let details =
-            acp_thread::sandbox_authorization_details_from_meta(&authorization.tool_call.meta)
+            agent_thread::sandbox_authorization_details_from_meta(&authorization.tool_call.meta)
                 .expect("unsandboxed should request sandbox authorization details");
         assert!(details.network_hosts.is_empty());
         assert!(!details.network_all_hosts);
@@ -3132,7 +3139,7 @@ mod tests {
         assert!(details.unsandboxed);
         assert!(details.write_paths.is_empty());
 
-        let acp_thread::PermissionOptions::Flat(options) = &authorization.options else {
+        let agent_thread::PermissionOptions::Flat(options) = &authorization.options else {
             panic!("expected flat sandbox permission options");
         };
         let options = options
@@ -3148,26 +3155,30 @@ mod tests {
         assert_eq!(
             options,
             vec![
-                ("allow", "Allow once", acp::PermissionOptionKind::AllowOnce),
+                (
+                    "allow",
+                    "Allow once",
+                    protocol::PermissionOptionKind::AllowOnce
+                ),
                 (
                     "allow_thread",
                     "Allow for this thread",
-                    acp::PermissionOptionKind::AllowAlways,
+                    protocol::PermissionOptionKind::AllowAlways,
                 ),
                 (
                     "allow_always",
                     "Allow always",
-                    acp::PermissionOptionKind::AllowAlways,
+                    protocol::PermissionOptionKind::AllowAlways,
                 ),
-                ("deny", "Deny", acp::PermissionOptionKind::RejectOnce),
+                ("deny", "Deny", protocol::PermissionOptionKind::RejectOnce),
             ]
         );
 
         authorization
             .response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("deny"),
-                acp::PermissionOptionKind::RejectOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("deny"),
+                protocol::PermissionOptionKind::RejectOnce,
             ))
             .expect("authorization response should send");
 
@@ -3238,9 +3249,9 @@ mod tests {
         let authorization = receiver.expect_authorization().await;
         authorization
             .response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("allow_always"),
-                acp::PermissionOptionKind::AllowAlways,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("allow_always"),
+                protocol::PermissionOptionKind::AllowAlways,
             ))
             .expect("authorization response should send");
         task.await.expect("granted command should run");
@@ -3278,7 +3289,7 @@ mod tests {
 
         let authorization2 = receiver2.expect_authorization().await;
         let details =
-            acp_thread::sandbox_authorization_details_from_meta(&authorization2.tool_call.meta)
+            agent_thread::sandbox_authorization_details_from_meta(&authorization2.tool_call.meta)
                 .expect("the identical request should prompt for sandbox authorization again");
         assert!(
             details
@@ -3291,9 +3302,9 @@ mod tests {
 
         authorization2
             .response
-            .send(acp_thread::SelectedPermissionOutcome::new(
-                acp::PermissionOptionId::new("deny"),
-                acp::PermissionOptionKind::RejectOnce,
+            .send(agent_thread::SelectedPermissionOutcome::new(
+                protocol::PermissionOptionId::new("deny"),
+                protocol::PermissionOptionKind::RejectOnce,
             ))
             .expect("authorization response should send");
         let result = task2
@@ -3520,24 +3531,24 @@ mod tests {
     #[test]
     fn test_network_request_to_sandbox_network_access_uses_explicit_unrestricted_variant() {
         match network_request_to_sandbox_network_access(&NetworkRequest::None) {
-            acp_thread::SandboxNetworkAccess::None => {}
+            agent_thread::SandboxNetworkAccess::None => {}
             other => panic!("expected no network access, got {other:?}"),
         }
 
         match network_request_to_sandbox_network_access(&NetworkRequest::AnyHost) {
-            acp_thread::SandboxNetworkAccess::All => {}
+            agent_thread::SandboxNetworkAccess::All => {}
             other => panic!("expected unrestricted network access, got {other:?}"),
         }
 
         // macOS and Linux confine host requests through the allowlist proxy.
         match network_request_to_sandbox_network_access(&host_request(&["github.com"])) {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
-            acp_thread::SandboxNetworkAccess::Restricted(allowlist) => {
+            agent_thread::SandboxNetworkAccess::Restricted(allowlist) => {
                 assert!(allowlist.allows("github.com"));
                 assert!(!allowlist.allows("example.com"));
             }
             #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-            acp_thread::SandboxNetworkAccess::None => {}
+            agent_thread::SandboxNetworkAccess::None => {}
             other => panic!("unexpected network access for host request, got {other:?}"),
         }
     }

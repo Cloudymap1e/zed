@@ -54,14 +54,14 @@ impl AiSettingItemSource {
         match self {
             Self::Extension => IconName::ZedSrcExtension,
             Self::Custom => IconName::ZedSrcCustom,
-            Self::Registry => IconName::AcpRegistry,
+            Self::Registry => IconName::AgentRegistry,
         }
     }
 
     fn tooltip_text(&self, label: &str) -> String {
         match self {
             Self::Extension => format!("{label} was installed from an extension."),
-            Self::Registry => format!("{label} was installed from the ACP registry."),
+            Self::Registry => format!("{label} was installed from the agent registry."),
             Self::Custom => format!("{label} was configured manually."),
         }
     }

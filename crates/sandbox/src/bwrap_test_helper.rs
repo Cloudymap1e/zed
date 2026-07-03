@@ -181,7 +181,7 @@ mod imp {
             FsMode::Restricted => {
                 let mut writable_paths = Vec::new();
                 for path in &check.writable_paths {
-                    // Mirror production (`acp_thread::SandboxWrap::to_policy`):
+                    // Mirror production (`agent_thread::SandboxWrap::to_policy`):
                     // the directory must exist before its inode can be pinned, so
                     // create it up front, then capture it.
                     std::fs::create_dir_all(path)

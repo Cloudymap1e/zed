@@ -146,7 +146,7 @@ As an example, [the Dagger team suggests](https://container-use.com/agent-integr
 > **Note:** In Zed v0.224.0 and above, tool approval is controlled by `agent.tool_permissions.default`.
 > In earlier versions, it was controlled by the `agent.always_allow_tool_actions` boolean (default `false`).
 
-Zed's Agent Panel provides the `agent.tool_permissions.default` setting to control tool approval behavior for the native Zed agent:
+Zed's Agent Panel provides the `agent.tool_permissions.default` setting to control tool approval behavior for agent tool calls:
 
 - `"confirm"` (default) — Prompts for approval before running any tool action, including MCP tool calls
 - `"allow"` — Auto-approves tool actions without prompting

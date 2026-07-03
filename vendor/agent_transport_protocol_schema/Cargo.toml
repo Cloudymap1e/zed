@@ -1,0 +1,43 @@
+[package]
+edition = "2024"
+name = "agent-transport-protocol-schema"
+version = "1.1.0"
+license = "Apache-2.0"
+publish = false
+
+[features]
+default = []
+tracing = ["dep:tracing"]
+unstable = [
+    "unstable_auth_methods",
+    "unstable_boolean_config",
+    "unstable_cancel_request",
+    "unstable_elicitation",
+    "unstable_end_turn_token_usage",
+    "unstable_session_fork",
+]
+unstable_auth_methods = []
+unstable_boolean_config = []
+unstable_cancel_request = []
+unstable_elicitation = []
+unstable_end_turn_token_usage = []
+unstable_llm_providers = []
+unstable_mcp_over_agent_transport = []
+unstable_nes = []
+unstable_plan_operations = []
+unstable_protocol_v2 = []
+unstable_session_fork = []
+
+[lib]
+name = "agent_transport_protocol_schema"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+derive_more = { version = "2", features = ["display", "from"] }
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_with = "3.15"
+strum.workspace = true
+tracing = { workspace = true, optional = true }

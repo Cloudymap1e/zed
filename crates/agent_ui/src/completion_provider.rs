@@ -4,17 +4,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use crate::DEFAULT_THREAD_TITLE;
-use crate::thread_metadata_store::{ThreadMetadata, ThreadMetadataStore};
 use agent_thread::MentionUri;
-use agent_thread::protocol;
 use anyhow::Result;
 use editor::{CompletionProvider, Editor, code_context_menus::COMPLETION_MENU_MAX_WIDTH};
 use futures::FutureExt as _;
 use fuzzy::{PathMatch, StringMatch, StringMatchCandidate};
-use gpui::{
-    App, BackgroundExecutor, Entity, Focusable, Hsla, SharedString, Task, WeakEntity, Window,
-};
+use gpui::{App, Entity, Focusable, Hsla, SharedString, Task, WeakEntity, Window};
 use language::{Buffer, CodeLabel, CodeLabelBuilder, HighlightId};
 use lsp::CompletionContext;
 use multi_buffer::ToOffset as _;
@@ -159,7 +154,6 @@ pub(crate) enum PromptContextType {
     File,
     Symbol,
     Fetch,
-    Thread,
     Skill,
     Diagnostics,
     BranchDiff,
@@ -243,7 +237,6 @@ impl TryFrom<&str> for PromptContextType {
             "file" => Ok(Self::File),
             "symbol" => Ok(Self::Symbol),
             "fetch" => Ok(Self::Fetch),
-            "thread" => Ok(Self::Thread),
             "skill" => Ok(Self::Skill),
             "diagnostics" => Ok(Self::Diagnostics),
             "diff" => Ok(Self::BranchDiff),
@@ -258,7 +251,6 @@ impl PromptContextType {
             Self::File => "file",
             Self::Symbol => "symbol",
             Self::Fetch => "fetch",
-            Self::Thread => "thread",
             Self::Skill => "skill",
             Self::Diagnostics => "diagnostics",
             Self::BranchDiff => "branch diff",
@@ -270,7 +262,6 @@ impl PromptContextType {
             Self::File => "Files & Directories",
             Self::Symbol => "Symbols",
             Self::Fetch => "Fetch",
-            Self::Thread => "Threads",
             Self::Skill => "Skills",
             Self::Diagnostics => "Diagnostics",
             Self::BranchDiff => "Branch Diff",
@@ -282,7 +273,6 @@ impl PromptContextType {
             Self::File => IconName::File,
             Self::Symbol => IconName::Code,
             Self::Fetch => IconName::ToolWeb,
-            Self::Thread => IconName::Thread,
             Self::Skill => IconName::Sparkle,
             Self::Diagnostics => IconName::Warning,
             Self::BranchDiff => IconName::GitBranch,
@@ -293,8 +283,6 @@ impl PromptContextType {
 pub(crate) enum Match {
     File(FileMatch),
     Symbol(SymbolMatch),
-    Thread(SessionMatch),
-    RecentThread(SessionMatch),
     Fetch(SharedString),
     Skill(AvailableSkill),
     Entry(EntryMatch),
@@ -311,8 +299,6 @@ impl Match {
         match self {
             Match::File(file) => file.mat.score,
             Match::Entry(mode) => mode.mat.as_ref().map(|mat| mat.score).unwrap_or(1.),
-            Match::Thread(_) => 1.,
-            Match::RecentThread(_) => 1.,
             Match::Symbol(_) => 1.,
             Match::Skill(_) => 1.,
             Match::Fetch(_) => 1.,
@@ -321,21 +307,9 @@ impl Match {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct SessionMatch {
-    session_id: protocol::SessionId,
-    title: SharedString,
-}
-
 pub struct EntryMatch {
     mat: Option<StringMatch>,
     entry: PromptContextEntry,
-}
-
-fn session_title(title: Option<SharedString>) -> SharedString {
-    title
-        .filter(|title| !title.is_empty())
-        .unwrap_or_else(|| SharedString::new_static(DEFAULT_THREAD_TITLE))
 }
 
 #[derive(Debug, Clone)]
@@ -387,7 +361,7 @@ pub struct AvailableCommand {
 impl AvailableCommand {
     fn category_order(&self) -> u8 {
         match self.category {
-            Some(agent_thread::CommandCategory::Native) => 0,
+            Some(agent_thread::CommandCategory::BuiltIn) => 0,
             Some(agent_thread::CommandCategory::Mcp) => 1,
             None => 2,
         }
@@ -396,7 +370,7 @@ impl AvailableCommand {
     /// Completion group key and header label for this command's category.
     fn group(&self) -> CompletionGroup {
         let (key, label) = match self.category {
-            Some(agent_thread::CommandCategory::Native) => ("commands", "Commands"),
+            Some(agent_thread::CommandCategory::BuiltIn) => ("commands", "Commands"),
             Some(agent_thread::CommandCategory::Mcp) => ("mcp-commands", "MCP Server Commands"),
             None => ("external-agent-commands", "Commands"),
         };
@@ -530,57 +504,6 @@ impl<T: PromptCompletionProviderDelegate> PromptCompletionProvider<T> {
                 });
                 Self::completion_for_action(action, source_range, editor, mention_set, selection)
             }
-        }
-    }
-
-    fn completion_for_thread(
-        session_id: protocol::SessionId,
-        title: Option<SharedString>,
-        source_range: Range<Anchor>,
-        recent: bool,
-        source: Arc<T>,
-        editor: WeakEntity<Editor>,
-        mention_set: WeakEntity<MentionSet>,
-        workspace: Entity<Workspace>,
-        cx: &mut App,
-    ) -> Completion {
-        let title = session_title(title);
-        let uri = MentionUri::Thread {
-            id: session_id,
-            name: title.to_string(),
-        };
-
-        let icon_for_completion = if recent {
-            IconName::HistoryRerun.path().into()
-        } else {
-            uri.icon_path(cx)
-        };
-
-        let new_text = format!("{} ", uri.as_link());
-
-        let new_text_len = new_text.len();
-        Completion {
-            replace_range: source_range.clone(),
-            new_text,
-            label: CodeLabel::plain(title.to_string(), None),
-            documentation: None,
-            insert_text_mode: None,
-            source: project::CompletionSource::Custom,
-            match_start: None,
-            snippet_deduplication_key: None,
-            icon_path: Some(icon_for_completion),
-            icon_color: None,
-            confirm: Some(confirm_completion_callback(
-                title,
-                source_range.start,
-                new_text_len - 1,
-                uri,
-                source,
-                editor,
-                mention_set,
-                workspace,
-            )),
-            group: None,
         }
     }
 
@@ -1113,19 +1036,6 @@ impl<T: PromptCompletionProviderDelegate> PromptCompletionProvider<T> {
                 })
             }
 
-            Some(PromptContextType::Thread) => {
-                let sessions = collect_session_matches(cx);
-                if !sessions.is_empty() {
-                    let search_task =
-                        filter_sessions_by_query(query, cancellation_flag, sessions, cx);
-                    cx.spawn(async move |_cx| {
-                        search_task.await.into_iter().map(Match::Thread).collect()
-                    })
-                } else {
-                    Task::ready(Vec::new())
-                }
-            }
-
             Some(PromptContextType::Fetch) => {
                 if !query.is_empty() {
                     Task::ready(vec![Match::Fetch(query.into())])
@@ -1324,26 +1234,6 @@ impl<T: PromptCompletionProviderDelegate> PromptCompletionProvider<T> {
                 }),
         );
 
-        if !self.source.supports_context(PromptContextType::Thread, cx) {
-            return Task::ready(recent);
-        }
-
-        let sessions = collect_session_matches(cx);
-        const RECENT_COUNT: usize = 2;
-        recent.extend(
-            sessions
-                .into_iter()
-                .filter(|session| {
-                    let uri = MentionUri::Thread {
-                        id: session.session_id.clone(),
-                        name: session.title.to_string(),
-                    };
-                    !mentions.contains(&uri)
-                })
-                .take(RECENT_COUNT)
-                .map(Match::RecentThread),
-        );
-
         Task::ready(recent)
     }
 
@@ -1356,10 +1246,6 @@ impl<T: PromptCompletionProviderDelegate> PromptCompletionProvider<T> {
             PromptContextEntry::Mode(PromptContextType::File),
             PromptContextEntry::Mode(PromptContextType::Symbol),
         ];
-
-        if self.source.supports_context(PromptContextType::Thread, cx) {
-            entries.push(PromptContextEntry::Mode(PromptContextType::Thread));
-        }
 
         let has_active_selection = workspace.update(cx, |workspace, cx| {
             AgentContextSource::from_active(workspace, cx)
@@ -1565,7 +1451,7 @@ impl<T: PromptCompletionProviderDelegate> CompletionProvider for PromptCompletio
                                 let group = show_section_headers.then(|| command.group());
 
                                 let icon_path = (command.category
-                                    == Some(agent_thread::CommandCategory::Native)
+                                    == Some(agent_thread::CommandCategory::BuiltIn)
                                     && command.name.as_ref() == agent::COMPACT_COMMAND_NAME)
                                     .then(|| IconName::Compact.path().into());
 
@@ -1721,8 +1607,7 @@ impl<T: PromptCompletionProviderDelegate> CompletionProvider for PromptCompletio
                         matches.sort_by_key(|mat| match mat {
                             Match::File(FileMatch {
                                 is_recent: true, ..
-                            })
-                            | Match::RecentThread(_) => 0,
+                            }) => 0,
                             Match::Entry(_) | Match::BranchDiff(_) => 1,
                             _ => 2,
                         });
@@ -1736,8 +1621,7 @@ impl<T: PromptCompletionProviderDelegate> CompletionProvider for PromptCompletio
                                     match &mat {
                                         Match::File(FileMatch {
                                             is_recent: true, ..
-                                        })
-                                        | Match::RecentThread(_) => Some(CompletionGroup {
+                                        }) => Some(CompletionGroup {
                                             key: "recent".into(),
                                             label: None,
                                         }),
@@ -1797,30 +1681,6 @@ impl<T: PromptCompletionProviderDelegate> CompletionProvider for PromptCompletio
                                             label_max_chars,
                                             cx,
                                         )
-                                    }
-                                    Match::Thread(thread) => Some(Self::completion_for_thread(
-                                        thread.session_id,
-                                        Some(thread.title),
-                                        source_range.clone(),
-                                        false,
-                                        source.clone(),
-                                        editor.clone(),
-                                        mention_set.clone(),
-                                        workspace.clone(),
-                                        cx,
-                                    )),
-                                    Match::RecentThread(thread) => {
-                                        Some(Self::completion_for_thread(
-                                            thread.session_id,
-                                            Some(thread.title),
-                                            source_range.clone(),
-                                            true,
-                                            source.clone(),
-                                            editor.clone(),
-                                            mention_set.clone(),
-                                            workspace.clone(),
-                                            cx,
-                                        ))
                                     }
                                     Match::Skill(skill) => Some(Self::completion_for_skill(
                                         skill,
@@ -2415,75 +2275,6 @@ pub(crate) fn search_symbols(
             })
             .collect()
     })
-}
-
-fn collect_session_matches(cx: &App) -> Vec<SessionMatch> {
-    let Some(store) = ThreadMetadataStore::try_global(cx) else {
-        return Vec::new();
-    };
-    let mut entries: Vec<&ThreadMetadata> = store
-        .read(cx)
-        .entries()
-        .filter(|t| !t.archived && t.agent_id == *agent::ZED_AGENT_ID)
-        .collect();
-    entries.sort_by_key(|t| Reverse(t.updated_at));
-    entries
-        .into_iter()
-        .map(|metadata| {
-            let info = agent_thread::AgentSessionInfo::from(metadata);
-            SessionMatch {
-                session_id: info.session_id,
-                title: session_title(info.title),
-            }
-        })
-        .collect()
-}
-
-fn filter_sessions_by_query(
-    query: String,
-    cancellation_flag: Arc<AtomicBool>,
-    sessions: Vec<SessionMatch>,
-    cx: &mut App,
-) -> Task<Vec<SessionMatch>> {
-    if query.is_empty() {
-        return Task::ready(sessions);
-    }
-    let executor = cx.background_executor().clone();
-    cx.background_spawn(async move {
-        filter_sessions(query, cancellation_flag, sessions, executor).await
-    })
-}
-
-async fn filter_sessions(
-    query: String,
-    cancellation_flag: Arc<AtomicBool>,
-    sessions: Vec<SessionMatch>,
-    executor: BackgroundExecutor,
-) -> Vec<SessionMatch> {
-    let titles = sessions
-        .iter()
-        .map(|session| session.title.clone())
-        .collect::<Vec<_>>();
-    let candidates = titles
-        .iter()
-        .enumerate()
-        .map(|(id, title)| StringMatchCandidate::new(id, title.as_ref()))
-        .collect::<Vec<_>>();
-    let matches = fuzzy::match_strings(
-        &candidates,
-        &query,
-        false,
-        true,
-        100,
-        &cancellation_flag,
-        executor,
-    )
-    .await;
-
-    matches
-        .into_iter()
-        .map(|mat| sessions[mat.candidate_id].clone())
-        .collect()
 }
 
 pub(crate) fn search_skills(
@@ -3245,32 +3036,9 @@ mod tests {
         );
     }
 
-    #[gpui::test]
-    async fn test_filter_sessions_by_query(cx: &mut TestAppContext) {
-        let alpha = SessionMatch {
-            session_id: protocol::SessionId::new("session-alpha"),
-            title: "Alpha Session".into(),
-        };
-        let beta = SessionMatch {
-            session_id: protocol::SessionId::new("session-beta"),
-            title: "Beta Session".into(),
-        };
-
-        let sessions = vec![alpha.clone(), beta];
-
-        let task = {
-            let mut app = cx.app.borrow_mut();
-            filter_sessions_by_query(
-                "Alpha".into(),
-                Arc::new(AtomicBool::default()),
-                sessions,
-                &mut app,
-            )
-        };
-
-        let results = task.await;
-        assert_eq!(results.len(), 1);
-        assert_eq!(results[0].session_id, alpha.session_id);
+    #[test]
+    fn test_thread_mention_mode_removed() {
+        assert!(PromptContextType::try_from("thread").is_err());
     }
 
     #[gpui::test]

@@ -92,12 +92,9 @@ impl SessionCapabilities {
         !self.available_commands.is_empty() || !self.available_skills.is_empty()
     }
 
-    fn supported_modes(&self, has_thread_store: bool) -> Vec<PromptContextType> {
+    fn supported_modes(&self, _has_thread_store: bool) -> Vec<PromptContextType> {
         let mut supported = vec![PromptContextType::File, PromptContextType::Symbol];
         if self.prompt_capabilities.embedded_context {
-            if has_thread_store {
-                supported.push(PromptContextType::Thread);
-            }
             supported.extend(&[
                 PromptContextType::Diagnostics,
                 PromptContextType::Fetch,
@@ -2277,7 +2274,7 @@ mod tests {
     use util::{path, paths::PathStyle, rel_path::rel_path};
     use workspace::{AppState, Item, MultiWorkspace, Workspace};
 
-    use crate::completion_provider::{AgentContextSelection, AvailableSkill, PromptContextType};
+    use crate::completion_provider::{AgentContextSelection, AvailableSkill};
     use crate::{
         conversation_view::tests::init_test,
         mention_set::insert_crease_for_mention,
@@ -2315,7 +2312,9 @@ mod tests {
             protocol::PromptCapabilities::default(),
             vec![
                 protocol::AvailableCommand::new("compact", "Built-in").meta(
-                    agent_thread::meta_with_command_category(agent_thread::CommandCategory::Native),
+                    agent_thread::meta_with_command_category(
+                        agent_thread::CommandCategory::BuiltIn,
+                    ),
                 ),
                 protocol::AvailableCommand::new("deploy", "MCP").meta(
                     agent_thread::meta_with_command_category(agent_thread::CommandCategory::Mcp),
@@ -2337,7 +2336,7 @@ mod tests {
         };
         assert_eq!(
             category("compact"),
-            Some(agent_thread::CommandCategory::Native)
+            Some(agent_thread::CommandCategory::BuiltIn)
         );
         assert_eq!(category("deploy"), Some(agent_thread::CommandCategory::Mcp));
         assert_eq!(category("help"), None);
@@ -3338,7 +3337,6 @@ mod tests {
                     format!("five.txt b{slash}"),
                     "Files & Directories".into(),
                     "Symbols".into(),
-                    "Threads".into(),
                     "Fetch".into()
                 ]
             );
@@ -4002,13 +4000,15 @@ mod tests {
         };
 
         assert!(
-            !supported_modes.contains(&PromptContextType::Thread),
+            supported_modes
+                .iter()
+                .all(|mode| mode.keyword() != "thread"),
             "Expected thread mode to be hidden when thread mentions are disabled"
         );
     }
 
     #[gpui::test]
-    async fn test_thread_mode_visible_when_enabled(cx: &mut TestAppContext) {
+    async fn test_thread_mode_hidden_after_legacy_agent_removal(cx: &mut TestAppContext) {
         init_test(cx);
 
         let fs = FakeFs::new(cx.executor());
@@ -4057,8 +4057,10 @@ mod tests {
         };
 
         assert!(
-            supported_modes.contains(&PromptContextType::Thread),
-            "Expected thread mode to be visible when enabled"
+            supported_modes
+                .iter()
+                .all(|mode| mode.keyword() != "thread"),
+            "Expected thread mode to remain hidden after legacy thread mentions were removed"
         );
     }
 
@@ -5520,8 +5522,8 @@ mod tests {
             .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
             .expect("decode png");
         let file_name = match extension {
-            Some(extension) => format!("zed-agent-ui-test-{}.{}", uuid::Uuid::new_v4(), extension),
-            None => format!("zed-agent-ui-test-{}", uuid::Uuid::new_v4()),
+            Some(extension) => format!("agent-ui-test-{}.{}", uuid::Uuid::new_v4(), extension),
+            None => format!("agent-ui-test-{}", uuid::Uuid::new_v4()),
         };
         let path = std::env::temp_dir().join(file_name);
         std::fs::write(&path, bytes).expect("write temp png");

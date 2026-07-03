@@ -6,7 +6,10 @@ use fs::Fs;
 use gpui::{Action, App, Entity, IntoElement};
 use project::agent_server_store::AllAgentServersSettings;
 use project::project_settings::ProjectSettings;
-use project::{AgentRegistryStore, RegistryAgent};
+use project::{
+    AgentRegistryStore, CLAUDE_AGENT_ID, CODEX_AGENT_ID, CURSOR_AGENT_ID,
+    GITHUB_COPILOT_CLI_AGENT_ID, RegistryAgent,
+};
 use settings::{
     BaseKeymap, CustomAgentServerSettings, Settings, SettingsStore, update_settings_file,
 };
@@ -526,8 +529,12 @@ fn render_import_settings_section(tab_index: &mut isize, cx: &mut App) -> impl I
         .child(h_flex().gap_1().child(vscode).child(cursor))
 }
 
-pub(crate) const FEATURED_AGENT_IDS: &[&str] =
-    &["claude-acp", "codex-acp", "github-copilot-cli", "cursor"];
+pub(crate) const FEATURED_AGENT_IDS: &[&str] = &[
+    CLAUDE_AGENT_ID,
+    CODEX_AGENT_ID,
+    GITHUB_COPILOT_CLI_AGENT_ID,
+    CURSOR_AGENT_ID,
+];
 
 fn render_registry_agent_button(
     agent: &RegistryAgent,

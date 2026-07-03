@@ -1396,9 +1396,9 @@ impl ThreadView {
         // A built-in command (e.g. `/compact`): run the bare command without
         // echoing it as a user message, and queue any trailing text the user
         // typed so it isn't silently dropped.
-        let native_command =
-            leading_native_command(text, self.session_capabilities.read().available_commands());
-        if let Some(command_name) = native_command {
+        let built_in_command =
+            leading_builtin_command(text, self.session_capabilities.read().available_commands());
+        if let Some(command_name) = built_in_command {
             cx.emit(AgentThreadViewEvent::Interacted);
             self.send_command_queueing_remainder(message_editor, command_name, window, cx);
             return;
@@ -1517,7 +1517,7 @@ impl ThreadView {
         contents_task: Task<
             anyhow::Result<Option<(Vec<protocol::ContentBlock>, Vec<Entity<Buffer>>)>>,
         >,
-        is_native_command: bool,
+        is_built_in_command: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1614,7 +1614,7 @@ impl ThreadView {
                     side = side
                 );
 
-                if is_native_command {
+                if is_built_in_command {
                     thread.send_command(contents, cx)
                 } else {
                     thread.send(contents, cx)
@@ -2131,14 +2131,14 @@ impl ThreadView {
         // `/compact` while a turn was generating). Detect that so we run it as a
         // command turn without echoing it as a user message, matching the
         // non-queued path.
-        let is_native_command = content
+        let is_built_in_command = content
             .first()
             .and_then(|block| match block {
                 protocol::ContentBlock::Text(text) => Some(text.text.as_str()),
                 _ => None,
             })
             .and_then(|text| {
-                leading_native_command(text, self.session_capabilities.read().available_commands())
+                leading_builtin_command(text, self.session_capabilities.read().available_commands())
             })
             .is_some();
 
@@ -2160,7 +2160,7 @@ impl ThreadView {
             Ok(Some((content, tracked_buffers)))
         });
 
-        self.send_content(contents_task, is_native_command, window, cx);
+        self.send_content(contents_task, is_built_in_command, window, cx);
     }
 
     pub fn move_queued_message_to_main_editor(
@@ -4328,7 +4328,7 @@ impl ThreadView {
 
         let queue_len = self.message_queue.len();
         let can_fast_track = self.message_queue.can_fast_track();
-        let is_native = false;
+        let show_steer_button = false;
 
         v_flex()
             .id("message_queue_list")
@@ -4393,7 +4393,7 @@ impl ThreadView {
                                         );
                                     })),
                             )
-                            .when(is_native, |row| {
+                            .when(show_steer_button, |row| {
                                 row.child(self.render_queue_steer_button(
                                     entry_id, index, is_next, steer_on, cx,
                                 ))
@@ -4467,7 +4467,7 @@ impl ThreadView {
                                         );
                                     })),
                             )
-                            .when(is_native, |row| {
+                            .when(show_steer_button, |row| {
                                 row.child(self.render_queue_steer_button(
                                     entry_id, index, is_next, steer_on, cx,
                                 ))
@@ -11314,21 +11314,21 @@ pub(crate) fn open_link(
 /// agents are excluded: their trailing text is a real argument the agent
 /// consumes.
 ///
-/// Native commands run a turn that produces its own thread entry, so the typed
+/// Built-in commands run a turn that produces its own thread entry, so the typed
 /// command is never echoed as a user message (see `send_command_queueing_remainder`).
-fn leading_native_command(
+fn leading_builtin_command(
     text: &str,
     available_commands: &[protocol::AvailableCommand],
 ) -> Option<String> {
     let rest = text.trim_start().strip_prefix('/')?;
     let name_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
     let name = &rest[..name_end];
-    let is_native = available_commands.iter().any(|command| {
+    let is_built_in = available_commands.iter().any(|command| {
         command.name == name
             && agent_thread::command_category_from_meta(&command.meta)
-                == Some(agent_thread::CommandCategory::Native)
+                == Some(agent_thread::CommandCategory::BuiltIn)
     });
-    is_native.then(|| name.to_string())
+    is_built_in.then(|| name.to_string())
 }
 
 /// Removes a leading `/command_name` token from `text`, returning the trimmed
@@ -11350,9 +11350,9 @@ mod tests {
     use util::path;
     use workspace::MultiWorkspace;
 
-    fn native_command(name: &str) -> protocol::AvailableCommand {
+    fn built_in_command(name: &str) -> protocol::AvailableCommand {
         protocol::AvailableCommand::new(name, "").meta(agent_thread::meta_with_command_category(
-            agent_thread::CommandCategory::Native,
+            agent_thread::CommandCategory::BuiltIn,
         ))
     }
 
@@ -11363,40 +11363,40 @@ mod tests {
     }
 
     #[test]
-    fn test_leading_native_command_matches_bare_and_with_remainder() {
-        let commands = [native_command("compact"), mcp_command("deploy")];
+    fn test_leading_builtin_command_matches_bare_and_with_remainder() {
+        let commands = [built_in_command("compact"), mcp_command("deploy")];
 
-        // Native command with trailing text.
+        // Built-in command with trailing text.
         assert_eq!(
-            leading_native_command("/compact summarize the API work", &commands),
+            leading_builtin_command("/compact summarize the API work", &commands),
             Some("compact".to_string())
         );
         // Leading/trailing whitespace is tolerated.
         assert_eq!(
-            leading_native_command("  /compact   do x  ", &commands),
+            leading_builtin_command("  /compact   do x  ", &commands),
             Some("compact".to_string())
         );
 
-        // Bare native command (no remainder) is still recognized, so it runs as
+        // Bare built-in command (no remainder) is still recognized, so it runs as
         // a command turn (without echoing a user message) rather than being sent
         // to the model as a normal prompt.
         assert_eq!(
-            leading_native_command("/compact", &commands),
+            leading_builtin_command("/compact", &commands),
             Some("compact".to_string())
         );
         assert_eq!(
-            leading_native_command("/compact   ", &commands),
+            leading_builtin_command("/compact   ", &commands),
             Some("compact".to_string())
         );
 
-        // MCP/External Agent commands are not native: their trailing text is a real
+        // MCP/External Agent commands are not built-in: their trailing text is a real
         // argument the agent consumes, and they echo as normal user messages.
-        assert_eq!(leading_native_command("/deploy prod", &commands), None);
-        assert_eq!(leading_native_command("/deploy", &commands), None);
+        assert_eq!(leading_builtin_command("/deploy prod", &commands), None);
+        assert_eq!(leading_builtin_command("/deploy", &commands), None);
 
         // Unknown command, or not a slash command at all.
-        assert_eq!(leading_native_command("/unknown foo", &commands), None);
-        assert_eq!(leading_native_command("just a message", &commands), None);
+        assert_eq!(leading_builtin_command("/unknown foo", &commands), None);
+        assert_eq!(leading_builtin_command("just a message", &commands), None);
     }
 
     #[test]

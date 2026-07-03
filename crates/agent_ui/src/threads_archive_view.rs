@@ -9,7 +9,6 @@ use crate::thread_metadata_store::{
 };
 use crate::{Agent, ArchiveSelectedThread, DEFAULT_THREAD_TITLE, RemoveSelectedThread};
 
-use agent::ThreadStore;
 use agent_settings::AgentSettings;
 use agent_thread::protocol;
 use chrono::{DateTime, Datelike as _, Local, NaiveDate, TimeDelta, Utc};
@@ -633,8 +632,9 @@ impl ThreadsArchiveView {
                     .upgrade()
                     .and_then(|store| store.read(cx).agent_icon(&thread.agent_id));
 
-                let icon = if thread.agent_id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
-                    IconName::ZedAgent
+                let icon = if thread.agent_id.as_ref() == agent::REMOVED_BUILT_IN_AGENT_ID.as_ref()
+                {
+                    IconName::Agent
                 } else {
                     IconName::Sparkle
                 };
@@ -814,7 +814,7 @@ impl ThreadsArchiveView {
     ) {
         ThreadMetadataStore::global(cx).update(cx, |store, cx| store.delete(thread_id, cx));
 
-        if agent.as_ref() == agent::ZED_AGENT_ID.as_ref() {
+        if agent.as_ref() == agent::REMOVED_BUILT_IN_AGENT_ID.as_ref() {
             cx.spawn(async move |_this, cx| {
                 crate::thread_worktree_archive::cleanup_thread_archived_worktrees(thread_id, cx)
                     .await;
@@ -828,11 +828,9 @@ impl ThreadsArchiveView {
         let Some(agent_connection_store) = self.agent_connection_store.upgrade() else {
             return;
         };
-        let fs = <dyn Fs>::global(cx);
-
         let task = agent_connection_store.update(cx, |store, cx| {
             store
-                .request_connection(agent.clone(), agent.server(fs, ThreadStore::global(cx)), cx)
+                .request_connection(agent.clone(), agent.server(), cx)
                 .read(cx)
                 .wait_for_connection()
         });

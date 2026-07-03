@@ -44,7 +44,7 @@ The implementations are highly platform-specific:
 Note that WSL shells can be used on all Windows projects, regardless of whether
 the files are stored in the Linux filesystem or not.
 
-Though not defined in this crate, the default grants provided by the Zed agent is:
+Though not defined in this crate, the default grants provided to agent terminals are:
 - read-only access to all files
 - read/write access to current project directories
   - read-only access to any Git metadata, including those in project directories

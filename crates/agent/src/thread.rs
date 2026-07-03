@@ -803,7 +803,7 @@ pub struct SiblingThreadRequest {
     pub title: SharedString,
     /// The initial prompt to send to the new thread.
     pub prompt: String,
-    /// Optional agent ID to use. Defaults to the native Zed agent.
+    /// Optional agent ID to use. When omitted, the environment chooses its default agent.
     pub agent_id: Option<String>,
     /// Optional model override, as `provider/model-id`.
     /// Defaults to the user's configured default model for the agent.
@@ -847,7 +847,7 @@ pub struct AvailableAgent {
     pub id: String,
     /// Human-readable name shown in the UI.
     pub name: SharedString,
-    /// Whether this is the removed legacy built-in agent.
+    /// Whether this is the removed legacy managed agent.
     pub is_native: bool,
     /// Models available for this agent. May be empty if models are not
     /// enumerated up front (e.g., external agents that choose their own).
@@ -1257,8 +1257,6 @@ pub struct Thread {
     thinking_enabled: bool,
     thinking_effort: Option<String>,
     speed: Option<Speed>,
-    prompt_capabilities_tx: watch::Sender<protocol::PromptCapabilities>,
-    pub(crate) prompt_capabilities_rx: watch::Receiver<protocol::PromptCapabilities>,
     pub(crate) project: Entity<Project>,
     pub(crate) action_log: Entity<ActionLog>,
     /// If this is a subagent thread, contains context about the parent
@@ -1278,13 +1276,6 @@ pub struct Thread {
 }
 
 impl Thread {
-    fn prompt_capabilities(model: Option<&dyn LanguageModel>) -> protocol::PromptCapabilities {
-        let image = model.map_or(true, |model| model.supports_images());
-        protocol::PromptCapabilities::new()
-            .image(image)
-            .embedded_context(true)
-    }
-
     pub fn new_subagent(parent_thread: &Entity<Thread>, cx: &mut Context<Self>) -> Self {
         let project = parent_thread.read(cx).project.clone();
         let project_context = parent_thread.read(cx).project_context.clone();
@@ -1358,8 +1349,6 @@ impl Thread {
             .default_model
             .as_ref()
             .and_then(|model| model.speed);
-        let (prompt_capabilities_tx, prompt_capabilities_rx) =
-            watch::channel(Self::prompt_capabilities(model.as_deref()));
         let model = model.map_or(ThreadModel::Unset, ThreadModel::Ready);
         Self {
             id: protocol::SessionId::new(uuid::Uuid::new_v4().to_string()),
@@ -1396,8 +1385,6 @@ impl Thread {
             thinking_enabled: enable_thinking,
             speed,
             thinking_effort,
-            prompt_capabilities_tx,
-            prompt_capabilities_rx,
             project,
             action_log,
             subagent_context: None,
@@ -1442,42 +1429,11 @@ impl Thread {
         self.thinking_enabled = selection.enable_thinking && model.supports_thinking();
         self.thinking_effort = selection.effort.clone();
         self.speed = selection.speed.filter(|_| model.supports_fast_mode());
-        self.prompt_capabilities_tx
-            .send(Self::prompt_capabilities(Some(model.as_ref())))
-            .log_err();
         self.model = ThreadModel::Ready(model);
     }
 
     pub fn id(&self) -> &protocol::SessionId {
         &self.id
-    }
-
-    // Only used by Seatbelt-style sandboxes (macOS); Linux relies on bwrap's
-    // tmpfs `/tmp` and Windows on the WSL bwrap tmpfs, so neither needs a
-    // per-thread temp directory.
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-    pub(crate) fn sandboxed_terminal_temp_dir(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> Result<PathBuf> {
-        if let Some(temp_dir) = &self.sandboxed_terminal_temp_dir {
-            std::fs::create_dir_all(temp_dir).with_context(|| {
-                format!(
-                    "failed to recreate sandboxed terminal temp directory {}",
-                    temp_dir.display()
-                )
-            })?;
-            return Ok(temp_dir.clone());
-        }
-
-        let temp_dir = tempfile::Builder::new()
-            .prefix("zed-agent-terminal-")
-            .tempdir()
-            .context("failed to create sandboxed terminal temp directory")?;
-        let temp_dir = temp_dir.keep();
-        self.sandboxed_terminal_temp_dir = Some(temp_dir.clone());
-        cx.notify();
-        Ok(temp_dir)
     }
 
     pub fn replay(
@@ -1740,10 +1696,6 @@ impl Thread {
                 .map_or(ThreadModel::Unset, ThreadModel::Ready),
         };
 
-        let (prompt_capabilities_tx, prompt_capabilities_rx) = watch::channel(
-            Self::prompt_capabilities(model.as_model().map(|model| model.as_ref())),
-        );
-
         let action_log = cx.new(|_| ActionLog::new(project.clone()));
 
         Self {
@@ -1782,8 +1734,6 @@ impl Thread {
             project,
             action_log,
             updated_at: db_thread.updated_at,
-            prompt_capabilities_tx,
-            prompt_capabilities_rx,
             subagent_context: db_thread.subagent_context,
             draft_prompt: db_thread.draft_prompt,
             ui_scroll_position: db_thread.ui_scroll_position.map(|sp| gpui::ListOffset {
@@ -1954,38 +1904,13 @@ impl Thread {
         self.model.as_model()
     }
 
-    pub(crate) fn ensure_model(
-        &mut self,
-        default_model: Option<&Arc<dyn LanguageModel>>,
-        cx: &mut Context<Self>,
-    ) {
-        let resolved = match &self.model {
-            ThreadModel::Ready(_) => return,
-            ThreadModel::Unresolved(selection) => {
-                LanguageModelRegistry::global(cx).update(cx, |registry, cx| {
-                    registry
-                        .select_model(selection, cx)
-                        .map(|configured| configured.model)
-                })
-            }
-            ThreadModel::Unset => default_model.cloned(),
-        };
-
-        if let Some(model) = resolved {
-            self.set_model(model, cx);
-        }
-    }
-
     pub fn set_model(&mut self, model: Arc<dyn LanguageModel>, cx: &mut Context<Self>) {
         let old_usage = self.latest_token_usage();
         self.model = ThreadModel::Ready(model.clone());
-        let new_caps = Self::prompt_capabilities(self.model.as_model().map(|model| model.as_ref()));
         let new_usage = self.latest_token_usage();
         if old_usage != new_usage {
             cx.emit(TokenUsageUpdated(new_usage));
         }
-        self.prompt_capabilities_tx.send(new_caps).log_err();
-
         for subagent in &self.running_subagents {
             subagent
                 .update(cx, |thread, cx| {
@@ -4073,15 +3998,17 @@ impl Thread {
             .is_some_and(|turn| turn.tools.contains_key(name))
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub fn has_registered_tool(&self, name: &str) -> bool {
         self.tools.contains_key(name)
     }
 
+    #[cfg(test)]
     pub(crate) fn register_running_subagent(&mut self, subagent: WeakEntity<Thread>) {
         self.running_subagents.push(subagent);
     }
 
+    #[cfg(test)]
     pub(crate) fn unregister_running_subagent(
         &mut self,
         subagent_session_id: &protocol::SessionId,
@@ -4093,7 +4020,7 @@ impl Thread {
         });
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub fn running_subagent_ids(&self, cx: &App) -> Vec<protocol::SessionId> {
         self.running_subagents
             .iter()

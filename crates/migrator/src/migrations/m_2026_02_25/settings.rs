@@ -4,6 +4,8 @@ use serde_json::Value;
 use crate::migrations::migrate_settings;
 
 const AGENT_SERVERS_KEY: &str = "agent_servers";
+pub(crate) const CLAUDE_REGISTRY_KEY: &str = "claude";
+pub(crate) const CODEX_REGISTRY_KEY: &str = "codex";
 
 struct BuiltinMapping {
     old_key: &'static str,
@@ -17,11 +19,11 @@ const BUILTIN_MAPPINGS: &[BuiltinMapping] = &[
     },
     BuiltinMapping {
         old_key: "claude",
-        registry_key: "claude-acp",
+        registry_key: CLAUDE_REGISTRY_KEY,
     },
     BuiltinMapping {
         old_key: "codex",
-        registry_key: "codex-acp",
+        registry_key: CODEX_REGISTRY_KEY,
     },
 ];
 

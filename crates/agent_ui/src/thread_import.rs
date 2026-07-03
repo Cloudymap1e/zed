@@ -1,13 +1,11 @@
 use std::time::Duration;
 
-use agent::ThreadStore;
 use agent_thread::AgentSessionListRequest;
 use agent_thread::protocol;
 use chrono::Utc;
 use collections::{HashMap, HashSet};
 use db::kvp::Dismissable;
 use db::sqlez;
-use fs::Fs;
 use futures::FutureExt as _;
 use gpui::{
     Animation, AnimationExt as _, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle,
@@ -701,7 +699,7 @@ fn fetch_sessions_for_agent(
             .read(cx)
             .remote_connection_options(cx);
         let agent = Agent::from(agent_id.clone());
-        let server = agent.server(<dyn Fs>::global(cx), ThreadStore::global(cx));
+        let server = agent.server();
         let entry = store.update(cx, |store, cx| store.request_connection(agent, server, cx));
 
         wait_for_connection_tasks.push(entry.read(cx).wait_for_connection().map({

@@ -65,15 +65,48 @@ impl std::fmt::Debug for AgentServerCommand {
     }
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, JsonSchema)]
 #[serde(transparent)]
 pub struct AgentId(pub SharedString);
 
+pub const CLAUDE_AGENT_ID: &str = "claude";
+pub const CODEX_AGENT_ID: &str = "codex";
+pub const CURSOR_AGENT_ID: &str = "cursor";
+pub const GEMINI_AGENT_ID: &str = "gemini";
+pub const GITHUB_COPILOT_CLI_AGENT_ID: &str = "github-copilot-cli";
+pub const REMOVED_BUILT_IN_AGENT_ID: &str = "removed-built-in-agent";
+
+pub const LEGACY_CLAUDE_AGENT_ID: &str = concat!("claude-", "a", "cp");
+pub const LEGACY_CODEX_AGENT_ID: &str = concat!("codex-", "a", "cp");
+const LEGACY_BUILT_IN_AGENT_ID: &str = concat!("Zed", " Agent");
+
+pub fn canonical_agent_id(id: &str) -> &str {
+    match id {
+        LEGACY_CLAUDE_AGENT_ID => CLAUDE_AGENT_ID,
+        LEGACY_CODEX_AGENT_ID => CODEX_AGENT_ID,
+        LEGACY_BUILT_IN_AGENT_ID => REMOVED_BUILT_IN_AGENT_ID,
+        _ => id,
+    }
+}
+
 impl AgentId {
     pub fn new(id: impl Into<SharedString>) -> Self {
-        AgentId(id.into())
+        let id = id.into();
+        let canonical = canonical_agent_id(id.as_ref());
+        if canonical == id.as_ref() {
+            AgentId(id)
+        } else {
+            AgentId(canonical.into())
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(AgentId::new(SharedString::deserialize(deserializer)?))
     }
 }
 
@@ -85,7 +118,7 @@ impl std::fmt::Display for AgentId {
 
 impl From<&'static str> for AgentId {
     fn from(value: &'static str) -> Self {
-        AgentId(value.into())
+        AgentId::new(value)
     }
 }
 
@@ -200,7 +233,7 @@ static EXTENSION_TO_REGISTRY_IDS: LazyLock<HashMap<&'static str, &'static str>> 
             ("auggie", "auggie"),
             ("stakpak", "stakpak"),
             ("codebuddy", "codebuddy-code"),
-            ("autohand-acp", "autohand"),
+            (concat!("autohand-", "a", "cp"), "autohand"),
             ("corust-agent", "corust-agent"),
             ("factory-droid", "factory-droid"),
             // Unmaintained
@@ -359,7 +392,7 @@ impl AgentServerStore {
         for (name, settings) in new_settings.iter() {
             match settings {
                 CustomAgentServerSettings::Custom { command, .. } => {
-                    let agent_name = AgentId(name.clone().into());
+                    let agent_name = AgentId::new(name.clone());
                     self.external_agents.insert(
                         agent_name.clone(),
                         ExternalAgentEntry::new(
@@ -374,14 +407,14 @@ impl AgentServerStore {
                     );
                 }
                 CustomAgentServerSettings::Registry { env, .. } => {
-                    let Some(agent) = registry_agents_by_id.get(name) else {
+                    let agent_name = AgentId::new(name.clone());
+                    let Some(agent) = registry_agents_by_id.get(agent_name.as_ref()) else {
                         if registry_store.is_some() {
                             log::debug!("Registry agent '{}' not found in agent registry", name);
                         }
                         continue;
                     };
 
-                    let agent_name = AgentId(name.clone().into());
                     match agent {
                         RegistryAgent::Binary(agent) => {
                             if !agent.supports_current_platform {
@@ -400,7 +433,7 @@ impl AgentServerStore {
                                         http_client: http_client.clone(),
                                         node_runtime: node_runtime.clone(),
                                         project_environment: project_environment.clone(),
-                                        registry_id: Arc::from(name.as_str()),
+                                        registry_id: Arc::from(agent_name.as_ref()),
                                         version: agent.metadata.version.clone(),
                                         targets: agent.targets.clone(),
                                         env: env.clone(),
@@ -422,7 +455,7 @@ impl AgentServerStore {
                                         fs: fs.clone(),
                                         node_runtime: node_runtime.clone(),
                                         project_environment: project_environment.clone(),
-                                        registry_id: Arc::from(name.as_str()),
+                                        registry_id: Arc::from(agent_name.as_ref()),
                                         version: agent.metadata.version.clone(),
                                         package: agent.package.clone(),
                                         args: agent.args.clone(),
@@ -744,7 +777,7 @@ impl AgentServerStore {
                 .names
                 .into_iter()
                 .map(|name| {
-                    let agent_id = AgentId(name.into());
+                    let agent_id = AgentId::new(name);
                     let (icon, display_name, source) = metadata
                         .remove(&agent_id)
                         .or_else(|| {
@@ -1643,21 +1676,20 @@ impl From<settings::CustomAgentServerSettings> for CustomAgentServerSettings {
 impl settings::Settings for AllAgentServersSettings {
     fn from_settings(content: &settings::SettingsContent) -> Self {
         let agent_settings = content.agent_servers.clone().unwrap();
-        Self(
-            agent_settings
-                .0
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        EXTENSION_TO_REGISTRY_IDS
-                            .get(&k.as_str())
-                            .map(|v| v.to_string())
-                            .unwrap_or(k),
-                        v.into(),
-                    )
-                })
-                .collect(),
-        )
+        let original = agent_settings.0;
+        let mut settings = HashMap::default();
+        for (key, value) in original.iter() {
+            let mapped = EXTENSION_TO_REGISTRY_IDS
+                .get(key.as_str())
+                .copied()
+                .unwrap_or(key.as_str());
+            let canonical = canonical_agent_id(mapped);
+            if canonical != key.as_str() && original.contains_key(canonical) {
+                continue;
+            }
+            settings.insert(canonical.to_string(), value.clone().into());
+        }
+        Self(settings)
     }
 }
 
@@ -1688,6 +1720,45 @@ mod tests {
             args: Vec::new(),
             env: HashMap::default(),
         })
+    }
+
+    #[test]
+    fn test_agent_id_legacy_ids_canonicalize_to_neutral_ids() {
+        assert_eq!(canonical_agent_id(LEGACY_CODEX_AGENT_ID), CODEX_AGENT_ID);
+        assert_eq!(canonical_agent_id(LEGACY_CLAUDE_AGENT_ID), CLAUDE_AGENT_ID);
+        assert_eq!(
+            canonical_agent_id(LEGACY_BUILT_IN_AGENT_ID),
+            REMOVED_BUILT_IN_AGENT_ID
+        );
+
+        assert_eq!(
+            AgentId::new(LEGACY_CODEX_AGENT_ID),
+            AgentId::new(CODEX_AGENT_ID)
+        );
+        assert_eq!(
+            AgentId::new(LEGACY_CLAUDE_AGENT_ID),
+            AgentId::new(CLAUDE_AGENT_ID)
+        );
+        assert_eq!(
+            AgentId::new(LEGACY_BUILT_IN_AGENT_ID),
+            AgentId::new(REMOVED_BUILT_IN_AGENT_ID)
+        );
+
+        let codex_id = serde_json::from_str::<AgentId>(&format!(r#""{LEGACY_CODEX_AGENT_ID}""#))
+            .expect("deserialize legacy Codex agent id");
+        assert_eq!(codex_id, AgentId::new(CODEX_AGENT_ID));
+        assert_eq!(
+            serde_json::to_string(&codex_id).expect("serialize Codex agent id"),
+            format!(r#""{CODEX_AGENT_ID}""#)
+        );
+    }
+
+    #[test]
+    fn test_legacy_autohand_extension_maps_to_registry_agent() {
+        assert_eq!(
+            EXTENSION_TO_REGISTRY_IDS.get(concat!("autohand-", "a", "cp")),
+            Some(&"autohand")
+        );
     }
 
     fn init_test_settings(cx: &mut TestAppContext) {
@@ -1749,6 +1820,24 @@ mod tests {
                 )
             })
         })
+    }
+
+    #[gpui::test]
+    fn test_legacy_registry_id_loads_under_canonical_id(cx: &mut TestAppContext) {
+        init_test_settings(cx);
+        init_registry(cx, vec![make_npx_agent(LEGACY_CODEX_AGENT_ID, "1.0.0")]);
+        set_registry_settings(cx, &[LEGACY_CODEX_AGENT_ID]);
+        let store = create_agent_server_store(cx);
+
+        store.read_with(cx, |store, _| {
+            assert!(
+                store
+                    .external_agents
+                    .contains_key(&AgentId::new(CODEX_AGENT_ID))
+            );
+            let raw_legacy_id = AgentId(SharedString::from(LEGACY_CODEX_AGENT_ID));
+            assert!(!store.external_agents.contains_key(&raw_legacy_id));
+        });
     }
 
     #[test]

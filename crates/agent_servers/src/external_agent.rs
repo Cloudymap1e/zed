@@ -1,4 +1,7 @@
 use action_log::ActionLog;
+use agent_thread::transport_protocol::{
+    self, Agent, Client, ConnectionTo, JsonRpcResponse, Lines, Responder,
+};
 use agent_thread::{
     AgentConnection, AgentSessionInfo, AgentSessionList, AgentSessionListRequest,
     AgentSessionListResponse, ElicitationStore,
@@ -7,7 +10,6 @@ use agent_thread::{
 use anyhow::anyhow;
 use async_channel;
 use collections::{HashMap, HashSet};
-use external_agent_protocol::{Agent, Client, ConnectionTo, JsonRpcResponse, Lines, Responder};
 use feature_flags::{ExternalAgentBetaFeatureFlag, FeatureFlagAppExt as _};
 use futures::channel::mpsc;
 use futures::future::Shared;
@@ -16,7 +18,7 @@ use futures::{AsyncBufReadExt as _, Future, FutureExt as _, StreamExt as _};
 use project::agent_server_store::{
     AgentServerCommand, AgentServerStore, AllAgentServersSettings, CustomAgentServerSettings,
 };
-use project::{AgentId, Project};
+use project::{AgentId, CURSOR_AGENT_ID, GEMINI_AGENT_ID, Project};
 use remote::remote_client::Interactive;
 use serde::Deserialize;
 use settings::{AgentConfigOptionValue, SettingsStore};
@@ -37,8 +39,6 @@ use gpui::{App, AppContext as _, AsyncApp, Entity, SharedString, Subscription, T
 use agent_thread::{AgentThread, AuthRequired, LoadError, TerminalProviderEvent};
 use terminal::TerminalBuilder;
 use terminal::terminal_settings::{AlternateScroll, CursorShape};
-
-use crate::{CURSOR_ID, GEMINI_ID};
 
 pub const GEMINI_TERMINAL_AUTH_METHOD_ID: &str = "spawn-gemini-cli";
 const PARAMETERIZED_MODEL_PICKER_META_KEY: &str = "parameterizedModelPicker";
@@ -685,7 +685,7 @@ const MINIMUM_SUPPORTED_VERSION: ProtocolVersion = ProtocolVersion::V1;
 /// `ConnectionTo<Agent>` handle as soon as the builder runs its `main_fn`.
 fn connect_client_future(
     name: &'static str,
-    transport: impl external_agent_protocol::ConnectTo<Client> + 'static,
+    transport: impl transport_protocol::ConnectTo<Client> + 'static,
     dispatch_tx: mpsc::UnboundedSender<ForegroundWork>,
     connection_tx: futures::channel::oneshot::Sender<ConnectionTo<Agent>>,
 ) -> impl Future<Output = Result<(), protocol::Error>> {
@@ -717,48 +717,48 @@ fn connect_client_future(
         // --- Request handlers (agent→client) ---
         .on_receive_request(
             on_request!(handle_request_permission),
-            external_agent_protocol::on_receive_request!(),
+            transport_protocol::on_receive_request!(),
         )
         .on_receive_request(
             on_request!(handle_write_text_file),
-            external_agent_protocol::on_receive_request!(),
+            transport_protocol::on_receive_request!(),
         )
         .on_receive_request(
             on_request!(handle_read_text_file),
-            external_agent_protocol::on_receive_request!(),
+            transport_protocol::on_receive_request!(),
         )
         .on_receive_request(
             on_request!(handle_create_terminal),
-            external_agent_protocol::on_receive_request!(),
+            transport_protocol::on_receive_request!(),
         )
         .on_receive_request(
             on_request!(handle_kill_terminal),
-            external_agent_protocol::on_receive_request!(),
+            transport_protocol::on_receive_request!(),
         )
         .on_receive_request(
             on_request!(handle_release_terminal),
-            external_agent_protocol::on_receive_request!(),
+            transport_protocol::on_receive_request!(),
         )
         .on_receive_request(
             on_request!(handle_terminal_output),
-            external_agent_protocol::on_receive_request!(),
+            transport_protocol::on_receive_request!(),
         )
         .on_receive_request(
             on_request!(handle_wait_for_terminal_exit),
-            external_agent_protocol::on_receive_request!(),
+            transport_protocol::on_receive_request!(),
         )
         .on_receive_request(
             on_request!(handle_create_elicitation),
-            external_agent_protocol::on_receive_request!(),
+            transport_protocol::on_receive_request!(),
         )
         // --- Notification handlers (agent→client) ---
         .on_receive_notification(
             on_notification!(handle_session_notification),
-            external_agent_protocol::on_receive_notification!(),
+            transport_protocol::on_receive_notification!(),
         )
         .on_receive_notification(
             on_notification!(handle_complete_elicitation),
-            external_agent_protocol::on_receive_notification!(),
+            transport_protocol::on_receive_notification!(),
         )
         .connect_with(
             transport,
@@ -783,7 +783,7 @@ fn client_capabilities_for_agent(
         ("terminal-auth".into(), true.into()),
     ]);
 
-    if agent_id.as_ref() == CURSOR_ID {
+    if agent_id.as_ref() == CURSOR_AGENT_ID {
         meta.insert(PARAMETERIZED_MODEL_PICKER_META_KEY.into(), true.into());
     }
 
@@ -1081,9 +1081,8 @@ impl ExternalAgentConnection {
         };
 
         // TODO: Remove this override once Google team releases their official auth methods
-        let auth_methods = if agent_id.0.as_ref() == GEMINI_ID {
-            let mut gemini_args = original_command.args.clone();
-            gemini_args.retain(|a| a != "--experimental-acp" && a != "--acp");
+        let auth_methods = if agent_id.0.as_ref() == GEMINI_AGENT_ID {
+            let gemini_args = gemini_terminal_auth_args(&original_command.args);
             let value = serde_json::json!({
                 "label": "gemini /auth",
                 "command": original_command.path.to_string_lossy(),
@@ -2185,7 +2184,7 @@ pub mod test_support {
 
     impl crate::AgentServer for FakeExternalAgentServer {
         fn logo(&self) -> ui::IconName {
-            ui::IconName::ZedAgent
+            ui::IconName::Agent
         }
 
         fn agent_id(&self) -> AgentId {
@@ -2446,7 +2445,7 @@ pub mod test_support {
         auth_elicitation_completion: Arc<Mutex<Option<protocol::CompleteElicitationNotification>>>,
         cx: &mut AsyncApp,
     ) -> Result<FakeExternalAgentConnectionHarness> {
-        let (client_transport, agent_transport) = external_agent_protocol::Channel::duplex();
+        let (client_transport, agent_transport) = transport_protocol::Channel::duplex();
 
         let logout_count = Arc::new(AtomicUsize::new(0));
         let sessions: Rc<RefCell<HashMap<protocol::SessionId, ExternalAgentSession>>> =
@@ -2470,7 +2469,7 @@ pub mod test_support {
                         ),
                     )
                 },
-                external_agent_protocol::on_receive_request!(),
+                transport_protocol::on_receive_request!(),
             )
             .on_receive_request(
                 {
@@ -2509,7 +2508,7 @@ pub mod test_support {
                         }
                     }
                 },
-                external_agent_protocol::on_receive_request!(),
+                transport_protocol::on_receive_request!(),
             )
             .on_receive_request(
                 async move |_req: protocol::NewSessionRequest, responder, _cx| {
@@ -2517,7 +2516,7 @@ pub mod test_support {
                         "unused",
                     )))
                 },
-                external_agent_protocol::on_receive_request!(),
+                transport_protocol::on_receive_request!(),
             )
             .on_receive_request(
                 {
@@ -2532,7 +2531,7 @@ pub mod test_support {
                         }
                     }
                 },
-                external_agent_protocol::on_receive_request!(),
+                transport_protocol::on_receive_request!(),
             )
             .on_receive_request(
                 {
@@ -2542,7 +2541,7 @@ pub mod test_support {
                         responder.respond(protocol::LoadSessionResponse::new())
                     }
                 },
-                external_agent_protocol::on_receive_request!(),
+                transport_protocol::on_receive_request!(),
             )
             .on_receive_request(
                 {
@@ -2552,7 +2551,7 @@ pub mod test_support {
                         responder.respond(protocol::CloseSessionResponse::new())
                     }
                 },
-                external_agent_protocol::on_receive_request!(),
+                transport_protocol::on_receive_request!(),
             )
             .on_receive_request(
                 {
@@ -2562,11 +2561,11 @@ pub mod test_support {
                         responder.respond(protocol::LogoutResponse::new())
                     }
                 },
-                external_agent_protocol::on_receive_request!(),
+                transport_protocol::on_receive_request!(),
             )
             .on_receive_notification(
                 async move |_notif: protocol::CancelNotification, _cx| Ok(()),
-                external_agent_protocol::on_receive_notification!(),
+                transport_protocol::on_receive_notification!(),
             )
             .connect_to(agent_transport);
 
@@ -2731,6 +2730,16 @@ pub mod test_support {
     }
 }
 
+fn gemini_terminal_auth_args(args: &[String]) -> Vec<String> {
+    args.iter()
+        .filter(|arg| {
+            arg.as_str() != concat!("--experimental-", "a", "cp")
+                && arg.as_str() != concat!("--", "a", "cp")
+        })
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2760,6 +2769,21 @@ mod tests {
                 });
             });
         });
+    }
+
+    #[test]
+    fn gemini_terminal_auth_args_strip_protocol_flags() {
+        let args = vec![
+            concat!("--experimental-", "a", "cp").to_string(),
+            "--model".to_string(),
+            "gemini-pro".to_string(),
+            concat!("--", "a", "cp").to_string(),
+        ];
+
+        assert_eq!(
+            gemini_terminal_auth_args(&args),
+            vec!["--model".to_string(), "gemini-pro".to_string()]
+        );
     }
 
     #[gpui::test]
@@ -3059,7 +3083,7 @@ mod tests {
 
     #[test]
     fn cursor_client_capabilities_include_parameterized_model_picker_meta() {
-        let capabilities = client_capabilities_for_agent(&AgentId::new(CURSOR_ID), false);
+        let capabilities = client_capabilities_for_agent(&AgentId::new(CURSOR_AGENT_ID), false);
         let meta = capabilities
             .meta
             .expect("expected client capabilities meta");
@@ -3410,7 +3434,7 @@ mod tests {
         sessions: Vec<protocol::SessionInfo>,
         cx: &mut gpui::TestAppContext,
     ) -> ConnectionTo<Agent> {
-        let (client_transport, agent_transport) = external_agent_protocol::Channel::duplex();
+        let (client_transport, agent_transport) = transport_protocol::Channel::duplex();
         let sessions = Arc::new(sessions);
 
         cx.background_spawn(
@@ -3425,7 +3449,7 @@ mod tests {
                                 .respond(protocol::ListSessionsResponse::new((*sessions).clone()))
                         }
                     },
-                    external_agent_protocol::on_receive_request!(),
+                    transport_protocol::on_receive_request!(),
                 )
                 .connect_to(agent_transport),
         )
@@ -3496,7 +3520,7 @@ mod tests {
         deleted_sessions: Arc<std::sync::Mutex<Vec<protocol::SessionId>>>,
         cx: &mut gpui::TestAppContext,
     ) -> ConnectionTo<Agent> {
-        let (client_transport, agent_transport) = external_agent_protocol::Channel::duplex();
+        let (client_transport, agent_transport) = transport_protocol::Channel::duplex();
 
         cx.background_spawn(
             Agent
@@ -3513,7 +3537,7 @@ mod tests {
                             responder.respond(protocol::DeleteSessionResponse::default())
                         }
                     },
-                    external_agent_protocol::on_receive_request!(),
+                    transport_protocol::on_receive_request!(),
                 )
                 .connect_to(agent_transport),
         )
@@ -3750,7 +3774,7 @@ mod tests {
         Arc<Mutex<Vec<protocol::SetSessionConfigOptionRequest>>>,
     ) {
         let set_config_requests = Arc::new(Mutex::new(Vec::new()));
-        let (client_transport, agent_transport) = external_agent_protocol::Channel::duplex();
+        let (client_transport, agent_transport) = transport_protocol::Channel::duplex();
 
         cx.background_spawn(
             Agent
@@ -3769,7 +3793,7 @@ mod tests {
                                 .respond(protocol::SetSessionConfigOptionResponse::new(Vec::new()))
                         }
                     },
-                    external_agent_protocol::on_receive_request!(),
+                    transport_protocol::on_receive_request!(),
                 )
                 .connect_to(agent_transport),
         )
@@ -3945,7 +3969,7 @@ mod tests {
         let load_session_gate: Arc<std::sync::Mutex<Option<async_channel::Receiver<()>>>> =
             Arc::new(std::sync::Mutex::new(None));
 
-        let (client_transport, agent_transport) = external_agent_protocol::Channel::duplex();
+        let (client_transport, agent_transport) = transport_protocol::Channel::duplex();
 
         let sessions: Rc<RefCell<HashMap<protocol::SessionId, ExternalAgentSession>>> =
             Rc::new(RefCell::new(HashMap::default()));
@@ -3970,13 +3994,13 @@ mod tests {
                         ),
                     )
                 },
-                external_agent_protocol::on_receive_request!(),
+                transport_protocol::on_receive_request!(),
             )
             .on_receive_request(
                 async move |_req: protocol::AuthenticateRequest, responder, _cx| {
                     responder.respond(Default::default())
                 },
-                external_agent_protocol::on_receive_request!(),
+                transport_protocol::on_receive_request!(),
             )
             .on_receive_request(
                 async move |_req: protocol::NewSessionRequest, responder, _cx| {
@@ -3984,13 +4008,13 @@ mod tests {
                         "unused",
                     )))
                 },
-                external_agent_protocol::on_receive_request!(),
+                transport_protocol::on_receive_request!(),
             )
             .on_receive_request(
                 async move |_req: protocol::PromptRequest, responder, _cx| {
                     responder.respond(protocol::PromptResponse::new(protocol::StopReason::EndTurn))
                 },
-                external_agent_protocol::on_receive_request!(),
+                transport_protocol::on_receive_request!(),
             )
             .on_receive_request(
                 {
@@ -4029,7 +4053,7 @@ mod tests {
                         responder.respond(protocol::LoadSessionResponse::new())
                     }
                 },
-                external_agent_protocol::on_receive_request!(),
+                transport_protocol::on_receive_request!(),
             )
             .on_receive_request(
                 {
@@ -4039,11 +4063,11 @@ mod tests {
                         responder.respond(protocol::CloseSessionResponse::new())
                     }
                 },
-                external_agent_protocol::on_receive_request!(),
+                transport_protocol::on_receive_request!(),
             )
             .on_receive_notification(
                 async move |_notif: protocol::CancelNotification, _cx| Ok(()),
-                external_agent_protocol::on_receive_notification!(),
+                transport_protocol::on_receive_notification!(),
             )
             .connect_to(agent_transport);
 

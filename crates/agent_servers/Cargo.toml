@@ -28,7 +28,6 @@ doctest = false
 agent_thread.workspace = true
 action_log.workspace = true
 async-channel.workspace = true
-external-agent-protocol.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 client.workspace = true

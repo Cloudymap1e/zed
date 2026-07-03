@@ -596,7 +596,7 @@ impl MentionSet {
         _cx: &mut Context<Self>,
     ) -> Task<Result<Mention>> {
         Task::ready(Err(anyhow!(
-            "Thread mentions are unavailable because the native Zed Agent has been removed"
+            "Thread mentions are unavailable because legacy built-in thread mentions have been removed"
         )))
     }
 
@@ -749,7 +749,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("Thread mentions are only supported for the native agent"),
+                .contains("legacy built-in thread mentions have been removed"),
             "Unexpected error: {error:#}"
         );
     }

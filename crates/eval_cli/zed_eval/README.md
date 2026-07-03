@@ -331,7 +331,7 @@ Exit codes:
 The Python package also exposes installed-agent classes used by the remote
 orchestrator:
 
-- `zed_eval.agent:ZedAgent` for Harbor
+- `zed_eval.agent:ZedEvalAgent` for Harbor
 - `zed_eval.pier_agent:ZedPierAgent` for Pier
 
 For manual Harbor experiments with a locally built Linux binary:
@@ -341,7 +341,7 @@ pip install -e crates/eval_cli/zed_eval/
 crates/eval_cli/script/build-linux
 
 harbor run -d "swebench_verified@latest" \
-  --agent-import-path zed_eval.agent:ZedAgent \
+  --agent-import-path zed_eval.agent:ZedEvalAgent \
   --ae binary_path=target/eval-cli \
   --ae EVAL_CLI_TIMEOUT=600 \
   -m anthropic/claude-sonnet-4-6

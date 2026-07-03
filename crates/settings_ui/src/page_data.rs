@@ -8018,8 +8018,8 @@ fn ai_page(cx: &App) -> SettingsPage {
                         .into(),
                 ),
                 search_aliases: &[
-                    "external agent",
-                    "agent client protocol",
+                    "agent transport",
+                    "external agent protocol",
                     "amp",
                     "claude agent",
                     "claude code",

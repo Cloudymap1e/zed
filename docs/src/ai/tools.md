@@ -1,6 +1,6 @@
 ---
 title: AI Agent Tools - Zed
-description: Built-in tools for supported Zed agent integrations, including file editing, code search, terminal commands, web search, skills, and diagnostics.
+description: Built-in tools for supported agent integrations, including file editing, code search, terminal commands, web search, skills, and diagnostics.
 ---
 
 # Tools

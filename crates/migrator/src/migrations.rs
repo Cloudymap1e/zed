@@ -321,6 +321,8 @@ pub(crate) mod m_2026_02_25 {
     mod settings;
 
     pub(crate) use settings::migrate_builtin_agent_servers_to_registry;
+    #[cfg(test)]
+    pub(crate) use settings::{CLAUDE_REGISTRY_KEY, CODEX_REGISTRY_KEY};
 }
 
 pub(crate) mod m_2026_03_16 {
@@ -363,4 +365,12 @@ pub(crate) mod m_2026_05_04 {
     mod settings;
 
     pub(crate) use settings::SETTINGS_PATTERNS;
+}
+
+pub(crate) mod m_2026_07_02 {
+    mod settings;
+
+    pub(crate) use settings::migrate_legacy_agent_registry_ids;
+    #[cfg(test)]
+    pub(crate) use settings::{LEGACY_CLAUDE_REGISTRY_KEY, LEGACY_CODEX_REGISTRY_KEY};
 }

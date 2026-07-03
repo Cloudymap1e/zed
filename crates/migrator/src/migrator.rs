@@ -257,6 +257,7 @@ pub fn migrate_settings(text: &str) -> Result<Option<String>> {
             migrations::m_2026_05_04::SETTINGS_PATTERNS,
             &SETTINGS_QUERY_2026_05_04,
         ),
+        MigrationType::Json(migrations::m_2026_07_02::migrate_legacy_agent_registry_ids),
     ];
     run_migrations(text, migrations)
 }
@@ -416,16 +417,34 @@ static EDIT_PREDICTION_SETTINGS_MIGRATION_QUERY: LazyLock<Query> = LazyLock::new
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::migrations::m_2026_02_25::{CLAUDE_REGISTRY_KEY, CODEX_REGISTRY_KEY};
+    use crate::migrations::m_2026_07_02::{LEGACY_CLAUDE_REGISTRY_KEY, LEGACY_CODEX_REGISTRY_KEY};
     use unindent::Unindent as _;
+
+    fn expand_agent_id_placeholders(text: &str) -> String {
+        text.replace(
+            "$CLAUDE_CUSTOM_AGENT_ID",
+            &format!("{CLAUDE_REGISTRY_KEY}-custom"),
+        )
+        .replace(
+            "$CODEX_CUSTOM_AGENT_ID",
+            &format!("{CODEX_REGISTRY_KEY}-custom"),
+        )
+        .replace("$LEGACY_CLAUDE_AGENT_ID", LEGACY_CLAUDE_REGISTRY_KEY)
+        .replace("$LEGACY_CODEX_AGENT_ID", LEGACY_CODEX_REGISTRY_KEY)
+        .replace("$CLAUDE_AGENT_ID", CLAUDE_REGISTRY_KEY)
+        .replace("$CODEX_AGENT_ID", CODEX_REGISTRY_KEY)
+    }
 
     #[track_caller]
     fn assert_migrated_correctly(migrated: Option<String>, expected: Option<&str>) {
+        let expected = expected.map(expand_agent_id_placeholders);
         match (&migrated, &expected) {
             (Some(migrated), Some(expected)) => {
                 pretty_assertions::assert_str_eq!(expected, migrated);
             }
             _ => {
-                pretty_assertions::assert_eq!(migrated.as_deref(), expected);
+                pretty_assertions::assert_eq!(migrated.as_deref(), expected.as_deref());
             }
         }
     }
@@ -454,7 +473,8 @@ mod tests {
         input: &str,
         output: Option<&str>,
     ) {
-        let migrated = run_migrations(input, migrations).unwrap();
+        let input = expand_agent_id_placeholders(input);
+        let migrated = run_migrations(&input, migrations).unwrap();
         assert_migrated_correctly(migrated.clone(), output);
 
         // expect that rerunning the migration does not result in another migration
@@ -4096,17 +4116,119 @@ mod tests {
             Some(
                 r#"{
     "agent_servers": {
-        "codex-acp": {
+        "gemini": {
+            "type": "registry",
+            "default_model": "gemini-2.0-flash"
+        },
+        "$CLAUDE_AGENT_ID": {
+            "type": "registry",
+            "default_mode": "plan"
+        },
+        "$CODEX_AGENT_ID": {
+            "type": "registry",
+            "default_model": "o4-mini"
+        }
+    }
+}"#,
+            ),
+        );
+    }
+
+    #[test]
+    fn test_migrate_builtin_agent_servers_full_chain_uses_neutral_agent_ids() {
+        assert_migrate_settings(
+            r#"{
+    "agent_servers": {
+        "claude": {
+            "default_mode": "plan"
+        },
+        "codex": {
+            "default_model": "o4-mini"
+        }
+    }
+}"#,
+            Some(
+                r#"{
+    "agent_servers": {
+        "claude": {
+            "type": "registry",
+            "default_mode": "plan"
+        },
+        "codex": {
+            "type": "registry",
+            "default_model": "o4-mini"
+        }
+    }
+}"#,
+            ),
+        );
+    }
+
+    #[test]
+    fn test_migrate_legacy_agent_registry_ids() {
+        assert_migrate_with_migrations(
+            &[MigrationType::Json(
+                migrations::m_2026_07_02::migrate_legacy_agent_registry_ids,
+            )],
+            r#"{
+    "agent_servers": {
+        "$LEGACY_CODEX_AGENT_ID": {
             "type": "registry",
             "default_model": "o4-mini"
         },
-        "claude-acp": {
+        "$LEGACY_CLAUDE_AGENT_ID": {
             "type": "registry",
             "default_mode": "plan"
         },
         "gemini": {
+            "type": "registry"
+        }
+    }
+}"#,
+            Some(
+                r#"{
+    "agent_servers": {
+        "codex": {
             "type": "registry",
-            "default_model": "gemini-2.0-flash"
+            "default_model": "o4-mini"
+        },
+        "claude": {
+            "type": "registry",
+            "default_mode": "plan"
+        },
+        "gemini": {
+            "type": "registry"
+        }
+    }
+}"#,
+            ),
+        );
+    }
+
+    #[test]
+    fn test_migrate_legacy_agent_registry_ids_preserves_existing_canonical_entries() {
+        assert_migrate_with_migrations(
+            &[MigrationType::Json(
+                migrations::m_2026_07_02::migrate_legacy_agent_registry_ids,
+            )],
+            r#"{
+    "agent_servers": {
+        "$LEGACY_CODEX_AGENT_ID": {
+            "type": "registry",
+            "default_model": "old"
+        },
+        "codex": {
+            "type": "registry",
+            "default_model": "new"
+        }
+    }
+}"#,
+            Some(
+                r#"{
+    "agent_servers": {
+        "codex": {
+            "type": "registry",
+            "default_model": "new"
         }
     }
 }"#,
@@ -4130,13 +4252,13 @@ mod tests {
             Some(
                 r#"{
     "agent_servers": {
-        "codex-acp": {
-            "type": "registry"
-        },
-        "claude-acp": {
-            "type": "registry"
-        },
         "gemini": {
+            "type": "registry"
+        },
+        "$CLAUDE_AGENT_ID": {
+            "type": "registry"
+        },
+        "$CODEX_AGENT_ID": {
             "type": "registry"
         }
     }
@@ -4165,7 +4287,7 @@ mod tests {
             Some(
                 r#"{
     "agent_servers": {
-        "claude-acp-custom": {
+        "$CLAUDE_CUSTOM_AGENT_ID": {
             "type": "custom",
             "command": "/usr/local/bin/claude",
             "args": [
@@ -4278,7 +4400,7 @@ mod tests {
             "type": "registry",
             "default_model": "gemini-2.0-flash"
         },
-        "claude-acp": {
+        "$CLAUDE_AGENT_ID": {
             "type": "registry",
             "default_mode": "plan"
         }
@@ -4308,7 +4430,7 @@ mod tests {
             Some(
                 r#"{
     "agent_servers": {
-        "claude-acp": {
+        "$CLAUDE_AGENT_ID": {
             "type": "registry",
             "default_mode": "plan"
         },
@@ -4333,22 +4455,13 @@ mod tests {
         "claude": {
             "default_mode": "plan"
         },
-        "claude-acp": {
+        "$CLAUDE_AGENT_ID": {
             "type": "registry",
             "default_model": "claude-sonnet-4"
         }
     }
 }"#,
-            Some(
-                r#"{
-    "agent_servers": {
-        "claude-acp": {
-            "type": "registry",
-            "default_model": "claude-sonnet-4"
-        }
-    }
-}"#,
-            ),
+            None,
         );
     }
 
@@ -4388,26 +4501,14 @@ mod tests {
             Some(
                 r#"{
     "agent_servers": {
-        "codex-acp": {
+        "$CODEX_AGENT_ID": {
             "type": "registry",
-            "env": {
-                "OPENAI_API_KEY": "sk-123"
-            },
+            "env": {"OPENAI_API_KEY": "sk-123"},
             "default_mode": "read-only",
             "default_model": "o4-mini",
-            "favorite_models": [
-                "o4-mini",
-                "codex-mini-latest"
-            ],
-            "default_config_options": {
-                "approval_mode": "auto-edit"
-            },
-            "favorite_config_option_values": {
-                "approval_mode": [
-                    "auto-edit",
-                    "suggest"
-                ]
-            }
+            "favorite_models": ["o4-mini", "codex-mini-latest"],
+            "default_config_options": {"approval_mode": "auto-edit"},
+            "favorite_config_option_values": {"approval_mode": ["auto-edit", "suggest"]}
         }
     }
 }"#,
@@ -4433,7 +4534,7 @@ mod tests {
             Some(
                 r#"{
     "agent_servers": {
-        "codex-acp-custom": {
+        "$CODEX_CUSTOM_AGENT_ID": {
             "type": "custom",
             "command": "/usr/local/bin/codex",
             "args": [
@@ -4468,16 +4569,16 @@ mod tests {
             Some(
                 r#"{
     "agent_servers": {
-        "codex-acp": {
-            "type": "registry"
-        },
-        "claude-acp": {
-            "type": "registry",
-            "default_mode": "plan"
-        },
         "gemini": {
             "type": "registry",
             "default_model": "gemini-2.0-flash"
+        },
+        "$CLAUDE_AGENT_ID": {
+            "type": "registry",
+            "default_mode": "plan"
+        },
+        "$CODEX_AGENT_ID": {
+            "type": "registry"
         }
     }
 }"#,

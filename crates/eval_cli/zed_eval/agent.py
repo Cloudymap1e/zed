@@ -27,7 +27,7 @@ EVAL_CLI_FINALIZE_BUFFER_SEC = 45
 EVAL_CLI_MIN_TIMEOUT_SEC = 60
 
 
-class ZedAgent(BaseInstalledAgent):
+class ZedEvalAgent(BaseInstalledAgent):
     def __init__(
         self,
         logs_dir: Path,

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, anyhow, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use collections::HashMap;
 use fs::Fs;
 use futures::{AsyncReadExt, future::join_all};
@@ -15,9 +16,9 @@ use serde::Deserialize;
 use settings::Settings as _;
 use util::ResultExt;
 
-use crate::{AgentId, DisableAiSettings};
+use crate::{AgentId, DisableAiSettings, canonical_agent_id};
 
-const REGISTRY_URL: &str = "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
+const BUNDLED_REGISTRY_SNAPSHOT_B64: &str = include_str!("agent_registry_snapshot.b64");
 const REFRESH_THROTTLE_DURATION: Duration = Duration::from_secs(60 * 60);
 // Bound the full request lifecycle, including response body reads; the shared
 // HTTP client only has a connect timeout.
@@ -126,10 +127,8 @@ pub struct AgentRegistryStore {
 impl AgentRegistryStore {
     /// Initialize the global AgentRegistryStore.
     ///
-    /// This loads the cached registry from disk. If the cache is empty but there
-    /// are registry agents configured in settings, it will trigger a network fetch.
-    /// Otherwise, call `refresh()` explicitly when you need fresh data
-    /// (e.g., when opening the Agent Registry page).
+    /// This loads the cached registry from disk, falling back to the bundled
+    /// external-agent registry snapshot.
     pub fn init_global(
         cx: &mut App,
         fs: Arc<dyn Fs>,
@@ -141,12 +140,6 @@ impl AgentRegistryStore {
 
         let store = cx.new(|cx| Self::new(fs, http_client, cx));
         cx.set_global(GlobalAgentRegistryStore(store.clone()));
-
-        store.update(cx, |store, cx| {
-            if store.agents.is_empty() {
-                store.refresh(cx);
-            }
-        });
 
         store
     }
@@ -187,7 +180,8 @@ impl AgentRegistryStore {
     }
 
     pub fn agent(&self, id: &AgentId) -> Option<&RegistryAgent> {
-        self.agents.iter().find(|agent| agent.id() == id)
+        let id = canonical_agent_id(id.as_ref());
+        self.agents.iter().find(|agent| agent.id().as_ref() == id)
     }
 
     pub fn is_fetching(&self) -> bool {
@@ -210,6 +204,10 @@ impl AgentRegistryStore {
             return;
         }
 
+        if remote_registry_url().is_none() && !self.agents.is_empty() {
+            return;
+        }
+
         self.is_fetching = true;
         self.fetch_error = None;
         self.last_refresh = Some(Instant::now());
@@ -227,7 +225,7 @@ impl AgentRegistryStore {
                         http_client,
                         data.index,
                         data.raw_body,
-                        true,
+                        data.update_cache,
                         &executor,
                     )
                     .await
@@ -283,12 +281,12 @@ impl AgentRegistryStore {
             last_refresh: None,
         };
 
-        store.load_cached_registry(fs, store.http_client.clone(), cx);
+        store.load_cached_or_bundled_registry(fs, store.http_client.clone(), cx);
 
         store
     }
 
-    fn load_cached_registry(
+    fn load_cached_or_bundled_registry(
         &mut self,
         fs: Arc<dyn Fs>,
         http_client: Arc<dyn HttpClient>,
@@ -300,16 +298,23 @@ impl AgentRegistryStore {
 
         cx.spawn(async move |this, cx| -> Result<()> {
             let cache_path = registry_cache_path();
-            if !fs.is_file(&cache_path).await {
-                return Ok(());
-            }
-
-            let bytes = fs
-                .load_bytes(&cache_path)
-                .await
-                .context("reading cached registry")?;
-            let index: RegistryIndex =
-                serde_json::from_slice(&bytes).context("parsing cached registry")?;
+            let (index, bytes) = if fs.is_file(&cache_path).await {
+                match fs.load_bytes(&cache_path).await {
+                    Ok(bytes) => match parse_registry_index(bytes, "cached registry") {
+                        Ok(data) => data,
+                        Err(error) => {
+                            log::warn!("failed to load cached external-agent registry: {error:#}");
+                            bundled_registry_index()?
+                        }
+                    },
+                    Err(error) => {
+                        log::warn!("failed to read cached external-agent registry: {error:#}");
+                        bundled_registry_index()?
+                    }
+                }
+            } else {
+                bundled_registry_index()?
+            };
 
             let executor = cx.background_executor().clone();
             let agents =
@@ -329,14 +334,24 @@ impl AgentRegistryStore {
 struct RegistryFetchResult {
     index: RegistryIndex,
     raw_body: Vec<u8>,
+    update_cache: bool,
 }
 
 async fn fetch_registry_index(
     http_client: Arc<dyn HttpClient>,
     executor: &BackgroundExecutor,
 ) -> Result<RegistryFetchResult> {
+    let Some(registry_url) = remote_registry_url() else {
+        let (index, raw_body) = bundled_registry_index()?;
+        return Ok(RegistryFetchResult {
+            index,
+            raw_body,
+            update_cache: false,
+        });
+    };
+
     let (status, body) =
-        fetch_url_body(http_client, REGISTRY_URL, REGISTRY_FETCH_TIMEOUT, executor)
+        fetch_url_body(http_client, registry_url, REGISTRY_FETCH_TIMEOUT, executor)
             .await
             .context("fetching agent registry")?;
 
@@ -348,11 +363,29 @@ async fn fetch_registry_index(
         );
     }
 
-    let index: RegistryIndex = serde_json::from_slice(&body).context("parsing agent registry")?;
+    let (index, body) = parse_registry_index(body, "agent registry")?;
     Ok(RegistryFetchResult {
         index,
         raw_body: body,
+        update_cache: true,
     })
+}
+
+fn remote_registry_url() -> Option<&'static str> {
+    None
+}
+
+fn bundled_registry_index() -> Result<(RegistryIndex, Vec<u8>)> {
+    let bytes = BASE64
+        .decode(BUNDLED_REGISTRY_SNAPSHOT_B64.lines().collect::<String>())
+        .context("decoding bundled external-agent registry")?;
+    parse_registry_index(bytes, "bundled external-agent registry")
+}
+
+fn parse_registry_index(bytes: Vec<u8>, context: &'static str) -> Result<(RegistryIndex, Vec<u8>)> {
+    let index: RegistryIndex =
+        serde_json::from_slice(&bytes).with_context(|| format!("parsing {context}"))?;
+    Ok((index, bytes))
 }
 
 async fn build_registry_agents(
@@ -387,8 +420,9 @@ async fn build_registry_agents(
     )
     .await;
 
-    let mut agents = Vec::new();
+    let mut agents: Vec<RegistryAgent> = Vec::new();
     for (entry, icon_path) in index.agents.into_iter().zip(icon_paths) {
+        let raw_id = entry.id.clone();
         let metadata = RegistryAgentMetadata {
             id: AgentId::new(entry.id),
             name: entry.name.into(),
@@ -448,6 +482,16 @@ async fn build_registry_agents(
             (None, Some(npx_agent)) => RegistryAgent::Npx(npx_agent),
             (None, None) => continue,
         };
+
+        if let Some(existing_ix) = agents
+            .iter()
+            .position(|existing| existing.id() == agent.id())
+        {
+            if raw_id == agent.id().as_ref() {
+                agents[existing_ix] = agent;
+            }
+            continue;
+        }
 
         agents.push(agent);
     }
@@ -571,11 +615,7 @@ fn resolve_icon_url(entry: &RegistryEntry) -> Option<String> {
         return Some(icon.to_string());
     }
 
-    let relative_icon = icon.trim_start_matches("./");
-    Some(format!(
-        "https://raw.githubusercontent.com/agentclientprotocol/registry/main/{}/{relative_icon}",
-        entry.id
-    ))
+    None
 }
 
 fn current_platform_key() -> Option<&'static str> {
@@ -672,4 +712,113 @@ struct RegistryNpxDistribution {
     args: Vec<String>,
     #[serde(default)]
     env: HashMap<String, String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fs::FakeFs;
+    use gpui::TestAppContext;
+    use http_client::FakeHttpClient;
+
+    fn registry_entry(id: &str, package: &str, version: &str) -> RegistryEntry {
+        RegistryEntry {
+            id: id.to_string(),
+            name: format!("{id} name"),
+            version: version.to_string(),
+            description: format!("{id} description"),
+            repository: None,
+            website: None,
+            icon: None,
+            distribution: RegistryDistribution {
+                binary: None,
+                npx: Some(RegistryNpxDistribution {
+                    package: package.to_string(),
+                    args: Vec::new(),
+                    env: HashMap::default(),
+                }),
+            },
+        }
+    }
+
+    #[test]
+    fn resolve_icon_url_keeps_absolute_urls() {
+        let mut entry = registry_entry("test-agent", "@example/test-agent", "1.0.0");
+        entry.icon = Some("https://example.com/test-agent.svg".to_string());
+
+        assert_eq!(
+            resolve_icon_url(&entry).expect("resolve absolute icon url"),
+            "https://example.com/test-agent.svg"
+        );
+    }
+
+    #[test]
+    fn resolve_icon_url_ignores_relative_urls_without_remote_registry() {
+        let mut entry = registry_entry("test-agent", "@example/test-agent", "1.0.0");
+        entry.icon = Some("./icon.svg".to_string());
+
+        assert_eq!(resolve_icon_url(&entry), None);
+    }
+
+    #[gpui::test]
+    async fn build_registry_agents_canonicalizes_legacy_ids(cx: &mut TestAppContext) {
+        let executor = cx.executor();
+        let fs = FakeFs::new(executor.clone());
+        let http_client = FakeHttpClient::with_404_response();
+        let agents = build_registry_agents(
+            fs,
+            http_client,
+            RegistryIndex {
+                _version: "1.0.0".into(),
+                agents: vec![registry_entry(
+                    crate::LEGACY_CODEX_AGENT_ID,
+                    "@example/codex",
+                    "1.0.0",
+                )],
+            },
+            Vec::new(),
+            false,
+            &executor,
+        )
+        .await
+        .expect("build registry agents");
+
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].id(), &AgentId::new(crate::CODEX_AGENT_ID));
+    }
+
+    #[gpui::test]
+    async fn build_registry_agents_prefers_neutral_id_over_legacy_duplicate(
+        cx: &mut TestAppContext,
+    ) {
+        let executor = cx.executor();
+        let fs = FakeFs::new(executor.clone());
+        let http_client = FakeHttpClient::with_404_response();
+        let agents = build_registry_agents(
+            fs,
+            http_client,
+            RegistryIndex {
+                _version: "1.0.0".into(),
+                agents: vec![
+                    registry_entry(crate::LEGACY_CODEX_AGENT_ID, "@example/legacy", "1.0.0"),
+                    registry_entry(crate::CODEX_AGENT_ID, "@example/neutral", "2.0.0"),
+                ],
+            },
+            Vec::new(),
+            false,
+            &executor,
+        )
+        .await
+        .expect("build registry agents");
+
+        assert_eq!(agents.len(), 1);
+        match &agents[0] {
+            RegistryAgent::Npx(agent) => {
+                assert_eq!(agent.metadata.id, AgentId::new(crate::CODEX_AGENT_ID));
+                assert_eq!(agent.package.as_ref(), "@example/neutral");
+                assert_eq!(agent.metadata.version.as_ref(), "2.0.0");
+            }
+            RegistryAgent::Binary(_) => panic!("expected npx registry agent"),
+        }
+    }
 }

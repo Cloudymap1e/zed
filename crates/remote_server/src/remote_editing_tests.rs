@@ -3,10 +3,10 @@
 /// We neead to find a way to test Windows-Non-Windows interactions.
 use crate::headless_project::HeadlessProject;
 use agent::{
-    AgentTool, NativeAgent, NativeAgentConnection, ReadFileTool, ReadFileToolInput, SkillTool,
-    SkillToolInput, SkillToolOutput, Templates, ThreadStore, ToolCallEventStream, ToolInput,
-    skill_body_resolver_for_project, skills_resolver_for_project,
+    AgentTool, ReadFileTool, ReadFileToolInput, SkillTool, SkillToolInput, SkillToolOutput,
+    ToolCallEventStream, ToolInput, skill_body_resolver_for_project,
 };
+use agent_skills::{Skill, SkillScopeId, SkillSource};
 use client::{Client, UserStore};
 use clock::FakeSystemClock;
 use collections::{HashMap, HashSet};
@@ -47,12 +47,11 @@ use settings::{Settings, SettingsLocation, SettingsStore, initial_server_setting
 use smol::stream::StreamExt;
 use std::{
     path::{Path, PathBuf},
-    rc::Rc,
     str::FromStr,
     sync::Arc,
 };
 use unindent::Unindent as _;
-use util::{path, path_list::PathList, paths::PathMatcher, rel_path::rel_path};
+use util::{path, paths::PathMatcher, rel_path::rel_path};
 
 #[gpui::test]
 async fn test_basic_remote_editing(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
@@ -3002,8 +3001,6 @@ async fn test_remote_agent_fs_tool_calls(cx: &mut TestAppContext, server_cx: &mu
 
 #[gpui::test]
 async fn test_adding_remote_skill(cx: &mut TestAppContext, server_cx: &mut TestAppContext) {
-    use agent_thread::AgentConnection as _;
-
     let fs = FakeFs::new(server_cx.executor());
     fs.insert_tree(
         path!("/project"),
@@ -3023,30 +3020,39 @@ async fn test_adding_remote_skill(cx: &mut TestAppContext, server_cx: &mut TestA
     cx.update(|cx| {
         LanguageModelRegistry::test(cx);
     });
-    let (_worktree, _rel_path) = project
+    let (worktree, _rel_path) = project
         .update(cx, |project, cx| {
             project.find_or_create_worktree(path!("/project"), true, cx)
         })
         .await
         .unwrap();
     cx.run_until_parked();
-    let thread_store = cx.new(|cx| ThreadStore::new(cx));
-    let agent = cx.update(|cx| NativeAgent::new(thread_store, Templates::new(), fs.clone(), cx));
-    let connection = Rc::new(NativeAgentConnection(agent.clone()));
-    let _agent_thread = cx
-        .update(|cx| {
-            connection.clone().new_session(
-                project.clone(),
-                PathList::new(&[Path::new("/project")]),
-                cx,
-            )
-        })
-        .await
-        .unwrap();
-    cx.run_until_parked();
+    let (worktree_id, worktree_root_name) = worktree.read_with(cx, |worktree, _cx| {
+        (
+            SkillScopeId(worktree.id().to_usize()),
+            Arc::<str>::from(worktree.root_name_str()),
+        )
+    });
 
+    let skills = Arc::new(std::sync::Mutex::new(vec![Skill {
+        name: "test-skill".to_string(),
+        description: "test description".to_string(),
+        source: SkillSource::ProjectLocal {
+            worktree_id,
+            worktree_root_name: worktree_root_name.clone(),
+        },
+        directory_path: PathBuf::from(path!("/project/.agents/skills/test-skill")),
+        skill_file_path: PathBuf::from(path!("/project/.agents/skills/test-skill/SKILL.md")),
+        load_warnings: Vec::new(),
+        disable_model_invocation: false,
+        embedded_body: None,
+    }]));
+    let skills_resolver = {
+        let skills = skills.clone();
+        move |_cx: &gpui::App| Arc::new(skills.lock().unwrap().clone())
+    };
     let skill_tool = Arc::new(SkillTool::with_body_resolver(
-        skills_resolver_for_project(agent.downgrade(), project.entity_id()),
+        skills_resolver,
         skill_body_resolver_for_project(project.clone(), fs.clone()),
     ));
     let (event_stream, mut event_stream_rx) = ToolCallEventStream::test();
@@ -3099,8 +3105,19 @@ async fn test_adding_remote_skill(cx: &mut TestAppContext, server_cx: &mut TestA
     )
     .await;
 
-    cx.run_until_parked();
-    cx.update(|cx| connection.refresh_skills_for_project(project, cx));
+    skills.lock().unwrap().push(Skill {
+        name: "test-2".to_string(),
+        description: "test description".to_string(),
+        source: SkillSource::ProjectLocal {
+            worktree_id,
+            worktree_root_name,
+        },
+        directory_path: PathBuf::from(path!("/project/.agents/skills/test-2")),
+        skill_file_path: PathBuf::from(path!("/project/.agents/skills/test-2/SKILL.md")),
+        load_warnings: Vec::new(),
+        disable_model_invocation: false,
+        embedded_body: None,
+    });
     cx.run_until_parked();
 
     let input2 = SkillToolInput {

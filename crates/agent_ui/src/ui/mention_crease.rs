@@ -421,7 +421,7 @@ fn open_thread(
             );
         } else {
             log::warn!(
-                "cannot open mentioned thread {id}: no thread metadata exists and native Zed Agent has been removed"
+                "cannot open mentioned thread {id}: no thread metadata exists for a removed legacy built-in agent"
             );
         }
     });

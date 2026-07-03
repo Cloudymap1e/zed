@@ -224,7 +224,7 @@ impl Onboarding {
         let client = Client::global(cx);
         let status = *client.status().borrow();
         let plan = workspace.user_store().read(cx).plan();
-        let zed_agent_state = if status.is_signed_out()
+        let zed_ai_state = if status.is_signed_out()
             || matches!(
                 status,
                 client::Status::AuthenticationError | client::Status::ConnectionError
@@ -249,7 +249,7 @@ impl Onboarding {
             .collect::<Vec<_>>();
         telemetry::event!(
             "Welcome Agent Setup Viewed",
-            zed_agent = zed_agent_state,
+            zed_ai = zed_ai_state,
             agents_installed = agents_installed,
         );
 

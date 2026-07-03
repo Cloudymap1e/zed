@@ -418,7 +418,12 @@ impl<'de> Deserialize<'de> for Agent {
         #[derive(Deserialize)]
         #[serde(rename_all = "snake_case")]
         enum DeserializedAgentVariant {
-            #[serde(alias = "NativeAgent", alias = "TextThread")]
+            #[serde(
+                alias = "NativeAgent",
+                alias = "TextThread",
+                alias = "native_agent",
+                alias = "text_thread"
+            )]
             RemovedAgent,
             #[serde(alias = "Custom")]
             Custom {
@@ -514,6 +519,21 @@ impl Agent {
         match self {
             Self::Custom { id } if id.as_ref() == agent::REMOVED_BUILT_IN_AGENT_ID.as_ref() => {
                 Rc::new(UnavailableAgentServer::new(id.clone()))
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            Self::Custom { id } if id.as_ref() == CODEX_AGENT_ID => {
+                let connection = agent_thread::StubAgentConnection::new()
+                    .with_agent_id(id.clone())
+                    .with_telemetry_id(id.0.clone());
+                connection.set_next_prompt_updates(vec![
+                    protocol::SessionUpdate::AgentMessageChunk(protocol::ContentChunk::new(
+                        "Default response".into(),
+                    )),
+                ]);
+                Rc::new(
+                    crate::test_support::StubAgentServer::new(connection)
+                        .with_connection_agent_id(),
+                )
             }
             Self::Custom { id: name } => {
                 Rc::new(agent_servers::CustomAgentServer::new(name.clone()))

@@ -1267,44 +1267,39 @@ impl ConversationView {
         let session_id = thread.read(cx).session_id().clone();
 
         // Check for config options first
-        // Config options take precedence over legacy mode/model selectors
+        // Config options take precedence over legacy selectors for the categories they provide.
         let config_options_provider = connection.session_config_options(&session_id, cx);
 
         let config_options_view;
-        let mode_selector;
-        let model_selector;
         if let Some(config_options) = config_options_provider {
-            // Use config options - don't create mode_selector or model_selector
             let agent_server = self.agent.clone();
             let fs = self.project.read(cx).fs().clone();
             config_options_view =
                 Some(cx.new(|cx| {
                     ConfigOptionsView::new(config_options, agent_server, fs, window, cx)
                 }));
-            model_selector = None;
-            mode_selector = None;
         } else {
-            // Fall back to dedicated mode/model selectors
             config_options_view = None;
-            model_selector = connection.model_selector(&session_id).map(|selector| {
-                cx.new(|cx| {
-                    ModelSelectorPopover::new(
-                        selector,
-                        PopoverMenuHandle::default(),
-                        self.focus_handle(cx),
-                        window,
-                        cx,
-                    )
-                })
-            });
-
-            mode_selector = connection
-                .session_modes(&session_id, cx)
-                .map(|session_modes| {
-                    let fs = self.project.read(cx).fs().clone();
-                    cx.new(|_cx| ModeSelector::new(session_modes, self.agent.clone(), fs))
-                });
         }
+
+        let model_selector = connection.model_selector(&session_id).map(|selector| {
+            cx.new(|cx| {
+                ModelSelectorPopover::new(
+                    selector,
+                    PopoverMenuHandle::default(),
+                    self.focus_handle(cx),
+                    window,
+                    cx,
+                )
+            })
+        });
+
+        let mode_selector = connection
+            .session_modes(&session_id, cx)
+            .map(|session_modes| {
+                let fs = self.project.read(cx).fs().clone();
+                cx.new(|_cx| ModeSelector::new(session_modes, self.agent.clone(), fs))
+            });
 
         let subscriptions = vec![
             cx.subscribe_in(&thread, window, Self::handle_thread_event),

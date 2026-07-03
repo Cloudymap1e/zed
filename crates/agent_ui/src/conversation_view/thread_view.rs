@@ -4253,11 +4253,29 @@ impl ThreadView {
                                     .gap_1()
                                     .children(self.render_token_usage(cx))
                                     .children(self.profile_selector.clone())
-                                    .map(|this| match self.config_options_view.clone() {
-                                        Some(config_view) => this.child(config_view),
-                                        None => this
-                                            .children(self.mode_selector.clone())
-                                            .children(self.model_selector.clone()),
+                                    .map(|this| {
+                                        if let Some(config_view) = self.config_options_view.clone()
+                                        {
+                                            let config_view_has_mode =
+                                                config_view.read(cx).has_category(
+                                                    protocol::SessionConfigOptionCategory::Mode,
+                                                );
+                                            let config_view_has_model =
+                                                config_view.read(cx).has_category(
+                                                    protocol::SessionConfigOptionCategory::Model,
+                                                );
+
+                                            this.child(config_view)
+                                                .when(!config_view_has_mode, |this| {
+                                                    this.children(self.mode_selector.clone())
+                                                })
+                                                .when(!config_view_has_model, |this| {
+                                                    this.children(self.model_selector.clone())
+                                                })
+                                        } else {
+                                            this.children(self.mode_selector.clone())
+                                                .children(self.model_selector.clone())
+                                        }
                                     })
                                     .child(self.render_send_button(cx)),
                             ),

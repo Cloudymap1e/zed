@@ -93,6 +93,10 @@ impl ConfigOptionsView {
         selector.update(cx, |selector, cx| selector.toggle_picker(window, cx))
     }
 
+    pub fn has_category(&self, category: protocol::SessionConfigOptionCategory) -> bool {
+        has_config_option_category(&self.config_options.config_options(), category)
+    }
+
     pub fn cycle_category_option(
         &mut self,
         category: protocol::SessionConfigOptionCategory,
@@ -1098,6 +1102,15 @@ fn find_option_name(
     }
 }
 
+fn has_config_option_category(
+    options: &[protocol::SessionConfigOption],
+    category: protocol::SessionConfigOptionCategory,
+) -> bool {
+    options
+        .iter()
+        .any(|option| option.category.as_ref() == Some(&category))
+}
+
 fn count_config_options(option: &protocol::SessionConfigOption) -> usize {
     match &option.kind {
         protocol::SessionConfigKind::Select(select) => match &select.options {
@@ -1121,6 +1134,37 @@ mod tests {
     use parking_lot::Mutex;
     use project::{AgentId, Project};
     use std::{any::Any, cell::RefCell};
+
+    #[test]
+    fn detects_config_option_categories() {
+        let options = vec![
+            protocol::SessionConfigOption::select(
+                "reasoning",
+                "Reasoning",
+                "high",
+                vec![protocol::SessionConfigSelectOption::new("high", "High")],
+            )
+            .category(protocol::SessionConfigOptionCategory::ThoughtLevel),
+            protocol::SessionConfigOption::select(
+                "model",
+                "Model",
+                "gpt-5.4",
+                vec![protocol::SessionConfigSelectOption::new(
+                    "gpt-5.4", "GPT-5.4",
+                )],
+            )
+            .category(protocol::SessionConfigOptionCategory::Model),
+        ];
+
+        assert!(has_config_option_category(
+            &options,
+            protocol::SessionConfigOptionCategory::Model
+        ));
+        assert!(!has_config_option_category(
+            &options,
+            protocol::SessionConfigOptionCategory::Mode
+        ));
+    }
 
     #[gpui::test]
     fn cycling_config_option_saves_selected_value_as_default(cx: &mut TestAppContext) {

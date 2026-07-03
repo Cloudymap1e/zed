@@ -6,17 +6,12 @@ use fs::Fs;
 use gpui::{App, AppContext as _, Entity, Task};
 use language_model::{ApiKey, EnvVar};
 use project::{
-    Project,
+    CLAUDE_AGENT_ID, CODEX_AGENT_ID, GEMINI_AGENT_ID, Project,
     agent_server_store::{AgentId, AllAgentServersSettings},
 };
 use settings::{AgentConfigOptionValue, SettingsStore, update_settings_file};
 use std::{rc::Rc, sync::Arc};
 use ui::IconName;
-
-pub const GEMINI_ID: &str = "gemini";
-pub const CLAUDE_AGENT_ID: &str = "claude-acp";
-pub const CODEX_ID: &str = "codex-acp";
-pub const CURSOR_ID: &str = "cursor";
 
 /// A generic agent server implementation for custom user-defined agents
 pub struct CustomAgentServer {
@@ -235,10 +230,10 @@ impl AgentServer for CustomAgentServer {
                 CLAUDE_AGENT_ID => {
                     extra_env.insert("ANTHROPIC_API_KEY".into(), "".into());
                 }
-                CODEX_ID => {
+                CODEX_AGENT_ID => {
                     add_codex_env(&mut extra_env);
                 }
-                GEMINI_ID => {
+                GEMINI_AGENT_ID => {
                     extra_env.insert("SURFACE".to_owned(), "zed".to_owned());
                 }
                 _ => {}
@@ -246,7 +241,7 @@ impl AgentServer for CustomAgentServer {
         }
         let store = delegate.store.downgrade();
         cx.spawn(async move |cx| {
-            if agent_id.as_ref() == CODEX_ID {
+            if agent_id.as_ref() == CODEX_AGENT_ID {
                 return crate::codex_native::connect(
                     agent_id,
                     project,
@@ -256,7 +251,7 @@ impl AgentServer for CustomAgentServer {
                 .await;
             }
 
-            if is_registry_agent && agent_id.as_ref() == GEMINI_ID {
+            if is_registry_agent && agent_id.as_ref() == GEMINI_AGENT_ID {
                 if let Some(api_key) = cx.update(api_key_for_gemini_cli).await.ok() {
                     extra_env.insert("GEMINI_API_KEY".into(), api_key);
                 }

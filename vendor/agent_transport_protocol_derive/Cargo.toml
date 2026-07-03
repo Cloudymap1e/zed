@@ -1,0 +1,15 @@
+[package]
+edition = "2024"
+name = "agent-transport-protocol-derive"
+version = "1.0.1"
+license = "Apache-2.0"
+publish = false
+
+[lib]
+proc-macro = true
+name = "agent_transport_protocol_derive"
+path = "src/lib.rs"
+
+[dependencies]
+quote.workspace = true
+syn.workspace = true

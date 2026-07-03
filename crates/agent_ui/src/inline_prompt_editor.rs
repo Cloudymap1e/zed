@@ -1209,7 +1209,6 @@ impl PromptCompletionProviderDelegate for PromptEditorCompletionProviderDelegate
         vec![
             PromptContextType::File,
             PromptContextType::Symbol,
-            PromptContextType::Thread,
             PromptContextType::Fetch,
             PromptContextType::Skill,
         ]

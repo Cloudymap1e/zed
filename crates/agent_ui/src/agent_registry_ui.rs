@@ -585,7 +585,7 @@ impl Render for AgentRegistryPage {
                                             .color(Color::Muted),
                                     )
                                     .on_click(move |_, _, cx| {
-                                        cx.open_url(&zed_urls::agent_registry_blog(cx))
+                                        cx.open_url(&zed_urls::external_agents_docs(cx))
                                     }),
                             ),
                     )

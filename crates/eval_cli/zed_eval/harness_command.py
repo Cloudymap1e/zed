@@ -117,7 +117,7 @@ def build_harness_command(run_request: dict[str, Any], jobs_dir: str) -> list[st
         (
             "zed_eval.pier_agent:ZedPierAgent"
             if harness_binary(benchmark) == benchmarks.HARNESS_PIER
-            else "zed_eval.agent:ZedAgent"
+            else "zed_eval.agent:ZedEvalAgent"
         ),
         "--ae",
         f"EVAL_CLI_CONTAINER_PATH=/data/builds/{build_id}/eval-cli",

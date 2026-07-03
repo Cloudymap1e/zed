@@ -524,7 +524,7 @@ impl LanguageModelProvider for BedrockLanguageModelProvider {
                     .into()
             })
             .description(InlineDescription::Text(
-                "To use Zed's agent with Bedrock, set a custom authentication strategy in your settings or use static credentials.".into(),
+                "To use Zed AI with Bedrock, set a custom authentication strategy in your settings or use static credentials.".into(),
             )),
         ))
     }
@@ -1593,7 +1593,7 @@ impl Render for ConfigurationView {
             .child(Headline::new("Amazon Bedrock").size(HeadlineSize::Small))
             .child(
                 Label::new(
-                    "To use Zed's agent with Bedrock, you can set a custom authentication strategy through your settings file or use static credentials.",
+                    "To use Zed AI with Bedrock, you can set a custom authentication strategy through your settings file or use static credentials.",
                 )
                 .color(Color::Muted),
             )

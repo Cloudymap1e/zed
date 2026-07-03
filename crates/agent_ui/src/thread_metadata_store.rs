@@ -3,9 +3,9 @@ use std::{
     sync::Arc,
 };
 
+use agent::REMOVED_BUILT_IN_AGENT_ID;
 #[cfg(test)]
 use agent::ThreadStore;
-use agent::ZED_AGENT_ID;
 use agent_thread::protocol;
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
@@ -127,7 +127,7 @@ fn migrate_thread_metadata(cx: &mut App) -> Task<anyhow::Result<()>> {
                     Some(ThreadMetadata {
                         thread_id: ThreadId::new(),
                         session_id: Some(entry.id),
-                        agent_id: ZED_AGENT_ID.clone(),
+                        agent_id: REMOVED_BUILT_IN_AGENT_ID.clone(),
                         title: if entry.title.is_empty()
                             || entry.title.as_ref() == DEFAULT_THREAD_TITLE
                         {
@@ -1720,7 +1720,7 @@ impl Column for ThreadMetadata {
 
         let agent_id = agent_id
             .map(|id| AgentId::new(id))
-            .unwrap_or(ZED_AGENT_ID.clone());
+            .unwrap_or(REMOVED_BUILT_IN_AGENT_ID.clone());
 
         let updated_at = DateTime::parse_from_rfc3339(&updated_at_str)?.with_timezone(&Utc);
         let created_at = created_at_str
@@ -1861,7 +1861,7 @@ mod tests {
             thread_id: ThreadId::new(),
             archived: false,
             session_id: Some(protocol::SessionId::new(session_id)),
-            agent_id: agent::ZED_AGENT_ID.clone(),
+            agent_id: agent::REMOVED_BUILT_IN_AGENT_ID.clone(),
             title: if title.is_empty() {
                 None
             } else {
@@ -1978,7 +1978,7 @@ mod tests {
             now,
             PathList::new(&[Path::new("/project-a")]),
         );
-        metadata.agent_id = agent::ZED_AGENT_ID.clone();
+        metadata.agent_id = agent::REMOVED_BUILT_IN_AGENT_ID.clone();
 
         let thread = std::thread::current();
         let test_name = thread.name().unwrap_or("unknown_test");
@@ -1998,7 +1998,7 @@ mod tests {
             .flatten();
         assert_eq!(
             persisted_agent_id.as_deref(),
-            Some(agent::ZED_AGENT_ID.as_ref())
+            Some(agent::REMOVED_BUILT_IN_AGENT_ID.as_ref())
         );
     }
 
@@ -2191,7 +2191,7 @@ mod tests {
         let moved_metadata = ThreadMetadata {
             thread_id: session1_thread_id,
             session_id: Some(protocol::SessionId::new("session-1")),
-            agent_id: agent::ZED_AGENT_ID.clone(),
+            agent_id: agent::REMOVED_BUILT_IN_AGENT_ID.clone(),
             title: Some("First Thread".into()),
             title_override: None,
             updated_at: updated_time,
@@ -2276,7 +2276,7 @@ mod tests {
         let existing_metadata = ThreadMetadata {
             thread_id: ThreadId::new(),
             session_id: Some(protocol::SessionId::new("a-session-0")),
-            agent_id: agent::ZED_AGENT_ID.clone(),
+            agent_id: agent::REMOVED_BUILT_IN_AGENT_ID.clone(),
             title: Some("Existing Metadata".into()),
             title_override: None,
             updated_at: now - chrono::Duration::seconds(10),
@@ -2349,10 +2349,9 @@ mod tests {
         });
 
         assert_eq!(list.len(), 4);
-        assert!(
-            list.iter()
-                .all(|metadata| metadata.agent_id.as_ref() == agent::ZED_AGENT_ID.as_ref())
-        );
+        assert!(list.iter().all(
+            |metadata| metadata.agent_id.as_ref() == agent::REMOVED_BUILT_IN_AGENT_ID.as_ref()
+        ));
 
         let existing_metadata = list
             .iter()
@@ -2402,7 +2401,7 @@ mod tests {
         let existing_metadata = ThreadMetadata {
             thread_id: ThreadId::new(),
             session_id: Some(protocol::SessionId::new("existing-session")),
-            agent_id: agent::ZED_AGENT_ID.clone(),
+            agent_id: agent::REMOVED_BUILT_IN_AGENT_ID.clone(),
             title: Some("Existing Metadata".into()),
             title_override: None,
             updated_at: existing_updated_at,
@@ -3147,7 +3146,7 @@ mod tests {
             thread_id: ThreadId::new(),
             archived: false,
             session_id: Some(protocol::SessionId::new("local-linked")),
-            agent_id: agent::ZED_AGENT_ID.clone(),
+            agent_id: agent::REMOVED_BUILT_IN_AGENT_ID.clone(),
             title: Some("Local Linked".into()),
             title_override: None,
             updated_at: now,
@@ -3161,7 +3160,7 @@ mod tests {
             thread_id: ThreadId::new(),
             archived: false,
             session_id: Some(protocol::SessionId::new("remote-linked")),
-            agent_id: agent::ZED_AGENT_ID.clone(),
+            agent_id: agent::REMOVED_BUILT_IN_AGENT_ID.clone(),
             title: Some("Remote Linked".into()),
             title_override: None,
             updated_at: now - chrono::Duration::seconds(1),

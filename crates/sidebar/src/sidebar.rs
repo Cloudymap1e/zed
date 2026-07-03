@@ -1,7 +1,7 @@
 mod thread_switcher;
 
 use action_log::DiffStats;
-use agent::{ThreadStore, ZED_AGENT_ID};
+use agent::{REMOVED_BUILT_IN_AGENT_ID, ThreadStore};
 use agent_settings::AgentSettings;
 use agent_thread::ThreadStatus;
 use agent_thread::protocol;
@@ -1409,13 +1409,13 @@ impl Sidebar {
         let resolve_agent_icon = |agent_id: &AgentId| -> (IconName, Option<SharedString>) {
             let agent = Agent::from(agent_id.clone());
             let icon = if agent.is_native() {
-                IconName::ZedAgent
+                IconName::Agent
             } else {
                 match agent {
                     Agent::Custom { .. } => IconName::Terminal,
                     #[cfg(any(test, feature = "test-support"))]
-                    Agent::Stub => IconName::ZedAgent,
-                    _ => IconName::ZedAgent,
+                    Agent::Stub => IconName::Agent,
+                    _ => IconName::Agent,
                 }
             };
             let icon_from_external_svg = agent_server_store
@@ -3629,13 +3629,13 @@ impl Sidebar {
         })
     }
 
-    fn is_removed_zed_agent_thread(metadata: &ThreadMetadata) -> bool {
-        metadata.agent_id.as_ref() == ZED_AGENT_ID.as_ref()
+    fn is_removed_builtin_agent_thread(metadata: &ThreadMetadata) -> bool {
+        metadata.agent_id.as_ref() == REMOVED_BUILT_IN_AGENT_ID.as_ref()
     }
 
-    fn log_removed_zed_agent_thread(metadata: &ThreadMetadata) {
+    fn log_removed_builtin_agent_thread(metadata: &ThreadMetadata) {
         log::warn!(
-            "cannot open legacy Zed Agent thread {:?}: Zed Agent has been removed",
+            "cannot open legacy built-in agent thread {:?}: The legacy built-in agent has been removed",
             metadata.thread_id
         );
     }
@@ -3647,8 +3647,8 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut App,
     ) {
-        if Self::is_removed_zed_agent_thread(metadata) {
-            Self::log_removed_zed_agent_thread(metadata);
+        if Self::is_removed_builtin_agent_thread(metadata) {
+            Self::log_removed_builtin_agent_thread(metadata);
             return;
         }
 
@@ -3777,10 +3777,14 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) {
         log::warn!(
-            "cannot regenerate title for legacy Zed Agent thread {thread_id:?}: Zed Agent has been removed"
+            "cannot regenerate title for legacy built-in agent thread {thread_id:?}: The legacy built-in agent has been removed"
         );
         if let Some(workspace) = self.active_workspace(cx) {
-            Self::show_thread_title_toast(workspace, "Zed Agent has been removed.", cx);
+            Self::show_thread_title_toast(
+                workspace,
+                "The legacy built-in agent has been removed.",
+                cx,
+            );
         }
     }
 
@@ -3804,8 +3808,8 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if Self::is_removed_zed_agent_thread(metadata) {
-            Self::log_removed_zed_agent_thread(metadata);
+        if Self::is_removed_builtin_agent_thread(metadata) {
+            Self::log_removed_builtin_agent_thread(metadata);
             return;
         }
 
@@ -3919,8 +3923,8 @@ impl Sidebar {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if Self::is_removed_zed_agent_thread(&metadata) {
-            Self::log_removed_zed_agent_thread(&metadata);
+        if Self::is_removed_builtin_agent_thread(&metadata) {
+            Self::log_removed_builtin_agent_thread(&metadata);
             return;
         }
 
@@ -6451,7 +6455,7 @@ impl Sidebar {
             ThreadEntryWorkspace::Closed { .. } => None,
         };
 
-        let is_zed_thread = thread.metadata.agent_id.as_ref() == ZED_AGENT_ID.as_ref();
+        let is_zed_thread = thread.metadata.agent_id.as_ref() == REMOVED_BUILT_IN_AGENT_ID.as_ref();
         let can_open_as_markdown = thread.is_live || is_zed_thread;
         let folder_paths = thread.metadata.folder_paths().clone();
 

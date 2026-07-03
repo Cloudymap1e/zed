@@ -3,6 +3,7 @@ mod diff;
 mod mention;
 pub mod protocol;
 mod terminal;
+pub mod transport_protocol;
 use crate::protocol::MaybeUndefined;
 pub use ::terminal::HeadlessTerminal;
 use action_log::{ActionLog, ActionLogTelemetry};
@@ -84,12 +85,12 @@ pub fn meta_with_tool_name(tool_name: &str) -> protocol::Meta {
 pub const COMMAND_CATEGORY_META_KEY: &str = "command_category";
 
 /// The source category of a slash command, used to group commands in the
-/// completion popup. Only the native Zed agent annotates its commands; commands
-/// from external agents carry no category and are grouped on their own.
+/// completion popup. Zed-managed commands are annotated; commands from
+/// external agents carry no category and are grouped on their own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandCategory {
-    /// Built-in Zed agent commands (e.g. `/compact`).
-    Native,
+    /// Zed-managed commands (e.g. `/compact`).
+    BuiltIn,
     /// Commands sourced from MCP server prompts.
     Mcp,
 }
@@ -97,14 +98,14 @@ pub enum CommandCategory {
 impl CommandCategory {
     fn as_str(self) -> &'static str {
         match self {
-            Self::Native => "native",
+            Self::BuiltIn => "native",
             Self::Mcp => "mcp",
         }
     }
 
     fn from_str(value: &str) -> Option<Self> {
         match value {
-            "native" => Some(Self::Native),
+            "native" => Some(Self::BuiltIn),
             "mcp" => Some(Self::Mcp),
             _ => None,
         }
@@ -4894,10 +4895,10 @@ mod tests {
         // Exhaustive list of variants. The match below has no wildcard arm, so
         // adding a `CommandCategory` variant fails to compile here until it's
         // covered, keeping the `as_str`/`from_str` wire contract in sync.
-        let all = [CommandCategory::Native, CommandCategory::Mcp];
+        let all = [CommandCategory::BuiltIn, CommandCategory::Mcp];
         for category in all {
             match category {
-                CommandCategory::Native | CommandCategory::Mcp => {}
+                CommandCategory::BuiltIn | CommandCategory::Mcp => {}
             }
             let meta = meta_with_command_category(category);
             assert_eq!(command_category_from_meta(&Some(meta)), Some(category));

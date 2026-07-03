@@ -849,7 +849,7 @@ fn build_settings_from_values(
         favorite_config_option_values: values.favorite_config_option_values,
     };
 
-    Ok((AgentId(name.into()), values.original_id, content))
+    Ok((AgentId::new(name), values.original_id, content))
 }
 
 /// Returns whether saving under `id` would overwrite a *different* existing
@@ -1066,7 +1066,7 @@ mod tests {
     }
 
     fn id(name: &str) -> AgentId {
-        AgentId(name.into())
+        AgentId::new(name)
     }
 
     #[test]

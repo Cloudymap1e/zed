@@ -93,4 +93,4 @@ Reference these in the skill body. The agent can read them using the file path s
 4. Write the `SKILL.md` with frontmatter and instructions. The `write_file` and `edit_file` tools also have a special allow case for creating or modifying files under `~/.agents/skills`.
 5. Optionally add supporting files (templates, examples, references).
 
-After creating the skill, it will be automatically discovered by Zed's agent on the next conversation (no restart needed for global skills if the `~/.agents/skills/` directory already exists).
+After creating the skill, it will be automatically discovered by Zed AI on the next conversation (no restart needed for global skills if the `~/.agents/skills/` directory already exists).

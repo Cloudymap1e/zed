@@ -69,11 +69,11 @@ pub fn skills_docs(cx: &App) -> String {
     format!("{docs_url}/ai/skills", docs_url = docs_url(cx))
 }
 
-/// Returns the URL to Zed's agent registry blog post.
-pub fn agent_registry_blog(cx: &App) -> String {
+/// Returns the URL to Zed's External Agents documentation.
+pub fn external_agents_docs(cx: &App) -> String {
     format!(
-        "{server_url}/blog/acp-registry",
-        server_url = server_url(cx)
+        "{docs_url}/ai/external-agents#registry",
+        docs_url = docs_url(cx)
     )
 }
 

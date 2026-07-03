@@ -30,8 +30,6 @@ You can add context in the Inline Assistant the same way you can in [the Agent P
 - @-mention files, directories, past threads, instruction files, and symbols
 - paste images that are copied on your clipboard
 
-You can also create a thread in the Agent Panel, then reference it with `@thread` in the Inline Assistant. This lets you refine a specific change from a larger thread without re-explaining context.
-
 ## Parallel Generations
 
 The Inline Assistant can generate multiple changes at once:

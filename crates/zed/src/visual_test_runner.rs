@@ -2948,7 +2948,7 @@ impl gpui::Render for ThreadItemBranchNameTestView {
             .child(
                 container().child(
                     ThreadItem::new("ti-main-branch", "Request for Long Classic Poem")
-                        .icon(IconName::ZedAgent)
+                        .icon(IconName::Agent)
                         .timestamp("2d")
                         .worktrees(vec![ThreadItemWorktreeInfo {
                             worktree_name: Some("zed".into()),
@@ -2965,7 +2965,7 @@ impl gpui::Render for ThreadItemBranchNameTestView {
             .child(
                 container().child(
                     ThreadItem::new("ti-main-no-branch", "Simple greeting thread")
-                        .icon(IconName::ZedAgent)
+                        .icon(IconName::Agent)
                         .timestamp("3d")
                         .worktrees(vec![ThreadItemWorktreeInfo {
                             worktree_name: Some("zed".into()),
@@ -2997,7 +2997,7 @@ impl gpui::Render for ThreadItemBranchNameTestView {
             .child(
                 container().child(
                     ThreadItem::new("ti-manual-linked", "Robust Git Worktree Rollback")
-                        .icon(IconName::ZedAgent)
+                        .icon(IconName::Agent)
                         .timestamp("40m")
                         .worktrees(vec![ThreadItemWorktreeInfo {
                             worktree_name: Some("focal-arrow".into()),
@@ -3052,7 +3052,7 @@ impl gpui::Render for ThreadItemBranchNameTestView {
             .child(
                 container().child(
                     ThreadItem::new("ti-main-full", "Main worktree with everything")
-                        .icon(IconName::ZedAgent)
+                        .icon(IconName::Agent)
                         .timestamp("5m")
                         .added(23)
                         .removed(8)

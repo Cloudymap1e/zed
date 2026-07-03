@@ -40,7 +40,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use ::ui::IconName;
-use agent_servers::CODEX_ID;
 use agent_settings::{AgentProfileId, AgentSettings};
 use agent_thread::protocol;
 use command_palette_hooks::CommandPaletteFilter;
@@ -58,7 +57,7 @@ use language::{
 use language_model::{
     ConfiguredModel, LanguageModelId, LanguageModelProviderId, LanguageModelRegistry,
 };
-use project::{AgentId, DisableAiSettings};
+use project::{AgentId, CODEX_AGENT_ID, DisableAiSettings};
 use prompt_store::{self, PromptBuilder, rules_to_skills_migration};
 use rope::Point;
 use schemars::JsonSchema;
@@ -379,9 +378,9 @@ where
         AgentIdOrLegacyAgent::AgentId(agent_id) => Ok(agent_id),
         AgentIdOrLegacyAgent::LegacyAgent(agent) => {
             let agent_id = agent.id();
-            if agent_id.as_ref() == agent::ZED_AGENT_ID.as_ref() {
+            if agent_id.as_ref() == agent::REMOVED_BUILT_IN_AGENT_ID.as_ref() {
                 Err(serde::de::Error::custom(
-                    "Zed Agent has been removed; use an External Agent id",
+                    "The legacy built-in agent has been removed; use an External Agent id",
                 ))
             } else {
                 Ok(agent_id)
@@ -406,7 +405,7 @@ pub enum Agent {
 impl Default for Agent {
     fn default() -> Self {
         Self::Custom {
-            id: CODEX_ID.into(),
+            id: CODEX_AGENT_ID.into(),
         }
     }
 }
@@ -420,7 +419,7 @@ impl<'de> Deserialize<'de> for Agent {
         #[serde(rename_all = "snake_case")]
         enum DeserializedAgentVariant {
             #[serde(alias = "NativeAgent", alias = "TextThread")]
-            NativeAgent,
+            RemovedAgent,
             #[serde(alias = "Custom")]
             Custom {
                 #[serde(rename = "name")]
@@ -438,7 +437,7 @@ impl<'de> Deserialize<'de> for Agent {
         }
 
         match DeserializedAgent::deserialize(deserializer)? {
-            DeserializedAgent::Variant(DeserializedAgentVariant::NativeAgent) => {
+            DeserializedAgent::Variant(DeserializedAgentVariant::RemovedAgent) => {
                 Ok(Self::removed_native_agent())
             }
             DeserializedAgent::Variant(DeserializedAgentVariant::Custom { id }) => {
@@ -453,6 +452,7 @@ impl<'de> Deserialize<'de> for Agent {
 
 impl From<AgentId> for Agent {
     fn from(id: AgentId) -> Self {
+        let id = AgentId::new(id.as_ref());
         #[cfg(any(test, feature = "test-support"))]
         if id.as_ref() == "stub" {
             return Self::Stub;
@@ -464,7 +464,7 @@ impl From<AgentId> for Agent {
 impl Agent {
     fn removed_native_agent() -> Self {
         Self::Custom {
-            id: agent::ZED_AGENT_ID.clone(),
+            id: agent::REMOVED_BUILT_IN_AGENT_ID.clone(),
         }
     }
 
@@ -485,7 +485,7 @@ impl Agent {
     }
 
     pub fn is_native(&self) -> bool {
-        self.id().as_ref() == agent::ZED_AGENT_ID.as_ref()
+        self.id().as_ref() == agent::REMOVED_BUILT_IN_AGENT_ID.as_ref()
     }
 
     pub fn label(&self) -> SharedString {
@@ -510,13 +510,9 @@ impl Agent {
         }
     }
 
-    pub fn server(
-        &self,
-        _fs: Arc<dyn fs::Fs>,
-        _thread_store: Entity<agent::ThreadStore>,
-    ) -> Rc<dyn agent_servers::AgentServer> {
+    pub fn server(&self) -> Rc<dyn agent_servers::AgentServer> {
         match self {
-            Self::Custom { id } if id.as_ref() == agent::ZED_AGENT_ID.as_ref() => {
+            Self::Custom { id } if id.as_ref() == agent::REMOVED_BUILT_IN_AGENT_ID.as_ref() => {
                 Rc::new(UnavailableAgentServer::new(id.clone()))
             }
             Self::Custom { id: name } => {
@@ -540,7 +536,7 @@ impl UnavailableAgentServer {
 
 impl agent_servers::AgentServer for UnavailableAgentServer {
     fn logo(&self) -> IconName {
-        IconName::ZedAgent
+        IconName::Agent
     }
 
     fn agent_id(&self) -> AgentId {
@@ -554,7 +550,7 @@ impl agent_servers::AgentServer for UnavailableAgentServer {
         _cx: &mut App,
     ) -> gpui::Task<anyhow::Result<Rc<dyn agent_thread::AgentConnection>>> {
         gpui::Task::ready(Err(anyhow::anyhow!(agent_thread::LoadError::Other(
-            "Zed Agent has been removed".into()
+            "The legacy built-in agent has been removed".into()
         ))))
     }
 
@@ -1015,6 +1011,7 @@ mod tests {
     use editor::actions::AcceptEditPrediction;
     use gpui::{BorrowAppContext, TestAppContext, px};
     use project::DisableAiSettings;
+    use project::LEGACY_CODEX_AGENT_ID;
     use settings::{
         DockPosition, NotifyWhenAgentWaiting, PlaySoundWhenAgentDone, Settings, SettingsStore,
     };
@@ -1288,17 +1285,23 @@ mod tests {
         assert_eq!(
             Agent::default(),
             Agent::Custom {
-                id: CODEX_ID.into(),
+                id: CODEX_AGENT_ID.into(),
             },
         );
         assert_eq!(
             serde_json::from_str::<Agent>(r#""NativeAgent""#).unwrap(),
-            Agent::from(agent::ZED_AGENT_ID.clone()),
+            Agent::from(agent::REMOVED_BUILT_IN_AGENT_ID.clone()),
         );
         assert_eq!(
             serde_json::from_str::<Agent>(r#""test-external-agent""#).unwrap(),
             Agent::Custom {
                 id: "test-external-agent".into(),
+            },
+        );
+        assert_eq!(
+            serde_json::from_str::<Agent>(&format!(r#""{LEGACY_CODEX_AGENT_ID}""#)).unwrap(),
+            Agent::Custom {
+                id: CODEX_AGENT_ID.into(),
             },
         );
         assert_eq!(
@@ -1312,6 +1315,12 @@ mod tests {
             serde_json::from_str::<NewExternalAgentThread>(r#"{"agent":"test-external-agent"}"#)
                 .unwrap();
         assert_eq!(action.agent, AgentId::from("test-external-agent"));
+
+        let action = serde_json::from_str::<NewExternalAgentThread>(&format!(
+            r#"{{"agent":"{LEGACY_CODEX_AGENT_ID}"}}"#
+        ))
+        .unwrap();
+        assert_eq!(action.agent, AgentId::from(CODEX_AGENT_ID));
 
         let action =
             NewExternalAgentThread::build(serde_json::json!({ "agent": "test-external-agent" }))

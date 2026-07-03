@@ -101,7 +101,7 @@ class HarnessCommandTests(unittest.TestCase):
         command = harness_command.build_harness_command(
             make_run_request("swe-atlas-rf"), "/tmp/jobs"
         )
-        self.assertIn("zed_eval.agent:ZedAgent", command)
+        self.assertIn("zed_eval.agent:ZedEvalAgent", command)
 
     def test_eval_cli_timeout_override(self) -> None:
         command = harness_command.build_harness_command(

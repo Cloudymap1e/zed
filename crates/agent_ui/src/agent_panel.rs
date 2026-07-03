@@ -10,7 +10,7 @@ use std::{
 };
 
 use agent::{ContextServerRegistry, SharedThread, ThreadStore};
-use agent_servers::{AgentServer, CODEX_ID};
+use agent_servers::AgentServer;
 use agent_settings::UserAgentsMd;
 use agent_thread::protocol;
 use agent_thread::{
@@ -19,7 +19,7 @@ use agent_thread::{
 use collections::HashSet;
 use db::kvp::{Dismissable, KeyValueStore};
 use itertools::Itertools;
-use project::{AgentId, ProjectItem};
+use project::{AgentId, CODEX_AGENT_ID, ProjectItem};
 use serde::{Deserialize, Serialize};
 
 use zed_actions::{
@@ -958,8 +958,8 @@ pub struct CreateThreadOptions {
     pub initial_content: Option<AgentInitialContent>,
     /// Agent to use. Defaults to the panel's selected agent.
     pub agent: Option<Agent>,
-    /// Model override, as `provider/model-id`. Only applied when the thread
-    /// uses the native Zed agent.
+    /// Model override, as `provider/model-id`. External Agent threads manage
+    /// model selection through their own config, so this is currently ignored.
     pub model: Option<String>,
     /// Working directories to attach to the new thread (e.g., the path of a
     /// freshly-created sibling worktree). When `None`, the thread inherits
@@ -1173,7 +1173,7 @@ pub struct AgentPanel {
 impl AgentPanel {
     fn default_selected_agent(_is_via_collab: bool) -> Agent {
         Agent::Custom {
-            id: CODEX_ID.into(),
+            id: CODEX_AGENT_ID.into(),
         }
     }
 
@@ -1683,7 +1683,7 @@ impl AgentPanel {
             );
         } else {
             log::warn!(
-                "cannot open thread session {session_id}: no thread metadata exists and native Zed Agent has been removed"
+                "cannot open thread session {session_id}: no thread metadata exists for a removed legacy built-in agent"
             );
         }
     }
@@ -1888,8 +1888,8 @@ impl AgentPanel {
             return;
         }
 
-        if action.agent.as_ref() == agent::ZED_AGENT_ID.as_ref() {
-            log::warn!("cannot start removed native Zed Agent from NewExternalAgentThread");
+        if action.agent.as_ref() == agent::REMOVED_BUILT_IN_AGENT_ID.as_ref() {
+            log::warn!("cannot start removed legacy built-in agent from NewExternalAgentThread");
             return;
         }
 
@@ -3395,7 +3395,7 @@ impl AgentPanel {
 
     pub fn refresh_skills(&mut self, _cx: &mut Context<Self>) {
         // External Agents own their native skills/configuration. Do not start
-        // the removed native Zed Agent just because Zed-managed skills changed.
+        // the removed legacy built-in agent just because Zed-managed skills changed.
     }
 
     fn expand_message_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3581,7 +3581,7 @@ impl AgentPanel {
     fn copy_thread_to_clipboard(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         Self::show_deferred_toast(
             &self.workspace,
-            "Copying removed Zed Agent threads is unavailable",
+            "Copying removed legacy built-in agent threads is unavailable",
             cx,
         );
     }
@@ -4317,8 +4317,7 @@ impl AgentPanel {
         })
         .detach();
 
-        let server = server_override
-            .unwrap_or_else(|| agent.server(self.fs.clone(), self.thread_store.clone()));
+        let server = server_override.unwrap_or_else(|| agent.server());
         let thread_store = None;
 
         let connection_store = self.connection_store.clone();
@@ -4361,7 +4360,9 @@ impl AgentPanel {
         .detach();
 
         if model_override.is_some() {
-            log::warn!("model overrides are ignored because native Zed Agent has been removed");
+            log::warn!(
+                "model overrides are ignored because External Agents manage model selection"
+            );
         }
 
         AgentThread { conversation_view }
@@ -6258,12 +6259,12 @@ mod tests {
     use std::time::Instant;
 
     fn removed_native_agent() -> Agent {
-        Agent::from(agent::ZED_AGENT_ID.clone())
+        Agent::from(agent::REMOVED_BUILT_IN_AGENT_ID.clone())
     }
 
     fn codex_agent() -> Agent {
         Agent::Custom {
-            id: CODEX_ID.into(),
+            id: CODEX_AGENT_ID.into(),
         }
     }
 
@@ -12021,7 +12022,7 @@ mod tests {
 
     impl AgentConnection for DisassociationTrackingConnection {
         fn agent_id(&self) -> AgentId {
-            agent::ZED_AGENT_ID.clone()
+            agent::REMOVED_BUILT_IN_AGENT_ID.clone()
         }
 
         fn telemetry_id(&self) -> SharedString {

@@ -45,7 +45,11 @@ use crate::{
     worktree_store::WorktreeIdCounter,
 };
 pub use agent_registry_store::{AgentRegistryStore, RegistryAgent};
-pub use agent_server_store::{AgentId, AgentServerStore, AgentServersUpdated, ExternalAgentSource};
+pub use agent_server_store::{
+    AgentId, AgentServerStore, AgentServersUpdated, CLAUDE_AGENT_ID, CODEX_AGENT_ID,
+    CURSOR_AGENT_ID, ExternalAgentSource, GEMINI_AGENT_ID, GITHUB_COPILOT_CLI_AGENT_ID,
+    LEGACY_CLAUDE_AGENT_ID, LEGACY_CODEX_AGENT_ID, REMOVED_BUILT_IN_AGENT_ID, canonical_agent_id,
+};
 pub use git_store::{
     ConflictRegion, ConflictSet, ConflictSetSnapshot, ConflictSetUpdate,
     git_traversal::{ChildEntriesGitIter, GitEntry, GitEntryRef, GitTraversal},

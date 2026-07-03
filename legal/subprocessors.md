@@ -18,7 +18,7 @@ Zed maintains contracts and data protection agreements with all subprocessors, i
 Zed offers three modes for AI:
 
 1. **Bring your own API key** — data goes directly from the customer to the model provider; Zed does not process or store it.
-2. [**External Agents**](https://zed.dev/docs/ai/external-agents) — Zed uses ACP to provide an enhanced experience with terminal-based AI code agents like Claude Code or OpenAI Codex. Data is not processed or stored by Zed when using external agents.
+2. [**External Agents**](https://zed.dev/docs/ai/external-agents) — Zed uses the External Agent protocol to provide an enhanced experience with terminal-based AI code agents like Claude Code or OpenAI Codex. Data is not processed or stored by Zed when using external agents.
 3. **Zed-hosted models** — Zed sends customer prompts to one of its AI providers (listed below). These vendors act as subprocessors only for customers who choose this mode.
 
 ### Ongoing Updates

@@ -87,6 +87,10 @@ impl ConfigOptionsView {
         true
     }
 
+    pub fn has_category(&self, category: acp::SessionConfigOptionCategory) -> bool {
+        has_config_option_category(&self.config_options.config_options(), category)
+    }
+
     pub fn cycle_category_option(
         &mut self,
         category: acp::SessionConfigOptionCategory,
@@ -866,6 +870,15 @@ fn find_option_name(
     }
 }
 
+fn has_config_option_category(
+    options: &[acp::SessionConfigOption],
+    category: acp::SessionConfigOptionCategory,
+) -> bool {
+    options
+        .iter()
+        .any(|option| option.category.as_ref() == Some(&category))
+}
+
 fn count_config_options(option: &acp::SessionConfigOption) -> usize {
     match &option.kind {
         acp::SessionConfigKind::Select(select) => match &select.options {
@@ -876,5 +889,39 @@ fn count_config_options(option: &acp::SessionConfigOption) -> usize {
             _ => 0,
         },
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_config_option_categories() {
+        let options = vec![
+            acp::SessionConfigOption::select(
+                "reasoning",
+                "Reasoning",
+                "high",
+                vec![acp::SessionConfigSelectOption::new("high", "High")],
+            )
+            .category(acp::SessionConfigOptionCategory::ThoughtLevel),
+            acp::SessionConfigOption::select(
+                "model",
+                "Model",
+                "gpt-5.4",
+                vec![acp::SessionConfigSelectOption::new("gpt-5.4", "GPT-5.4")],
+            )
+            .category(acp::SessionConfigOptionCategory::Model),
+        ];
+
+        assert!(has_config_option_category(
+            &options,
+            acp::SessionConfigOptionCategory::Model
+        ));
+        assert!(!has_config_option_category(
+            &options,
+            acp::SessionConfigOptionCategory::Mode
+        ));
     }
 }

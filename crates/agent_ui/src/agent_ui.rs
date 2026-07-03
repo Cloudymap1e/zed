@@ -259,7 +259,7 @@ pub struct NewNativeAgentThreadFromSummary {
     from_session_id: acp::SessionId,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Agent {
@@ -273,6 +273,46 @@ pub enum Agent {
     },
     #[cfg(any(test, feature = "test-support"))]
     Stub,
+}
+
+impl<'de> Deserialize<'de> for Agent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum DeserializedAgentVariant {
+            #[serde(alias = "NativeAgent", alias = "TextThread")]
+            NativeAgent,
+            #[serde(alias = "Custom")]
+            Custom {
+                #[serde(rename = "name")]
+                id: AgentId,
+            },
+            #[cfg(any(test, feature = "test-support"))]
+            Stub,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum DeserializedAgent {
+            Variant(DeserializedAgentVariant),
+            Id(AgentId),
+        }
+
+        match DeserializedAgent::deserialize(deserializer)? {
+            DeserializedAgent::Variant(DeserializedAgentVariant::NativeAgent) => {
+                Ok(Self::NativeAgent)
+            }
+            DeserializedAgent::Variant(DeserializedAgentVariant::Custom { id }) => {
+                Ok(Self::Custom { id })
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            DeserializedAgent::Variant(DeserializedAgentVariant::Stub) => Ok(Self::Stub),
+            DeserializedAgent::Id(id) => Ok(Self::from(id)),
+        }
+    }
 }
 
 impl From<AgentId> for Agent {
@@ -905,10 +945,38 @@ mod tests {
             Agent::NativeAgent,
         );
         assert_eq!(
+            serde_json::from_str::<Agent>(r#""codex-acp""#).unwrap(),
+            Agent::Custom {
+                id: "codex-acp".into(),
+            },
+        );
+        assert_eq!(
             serde_json::from_str::<Agent>(r#"{"Custom":{"name":"my-agent"}}"#).unwrap(),
             Agent::Custom {
                 id: "my-agent".into(),
             },
+        );
+
+        let action =
+            serde_json::from_str::<NewExternalAgentThread>(r#"{"agent":"codex-acp"}"#).unwrap();
+        assert_eq!(
+            action.agent,
+            Some(Agent::Custom {
+                id: "codex-acp".into()
+            })
+        );
+
+        let action =
+            NewExternalAgentThread::build(serde_json::json!({ "agent": "codex-acp" })).unwrap();
+        let action = action
+            .as_any()
+            .downcast_ref::<NewExternalAgentThread>()
+            .unwrap();
+        assert_eq!(
+            action.agent,
+            Some(Agent::Custom {
+                id: "codex-acp".into()
+            })
         );
     }
 }

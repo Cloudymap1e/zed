@@ -1085,7 +1085,6 @@ impl ConversationView {
         let config_options_provider = connection.session_config_options(&session_id, cx);
 
         let config_options_view;
-        let mode_selector;
         let model_selector = connection.model_selector(&session_id).map(|selector| {
             let agent_server = self.agent.clone();
             let fs = self.project.read(cx).fs().clone();
@@ -1108,17 +1107,16 @@ impl ConversationView {
                 Some(cx.new(|cx| {
                     ConfigOptionsView::new(config_options, agent_server, fs, window, cx)
                 }));
-            mode_selector = None;
         } else {
-            // Fall back to legacy mode/model selectors
             config_options_view = None;
-            mode_selector = connection
-                .session_modes(&session_id, cx)
-                .map(|session_modes| {
-                    let fs = self.project.read(cx).fs().clone();
-                    cx.new(|_cx| ModeSelector::new(session_modes, self.agent.clone(), fs))
-                });
         }
+
+        let mode_selector = connection
+            .session_modes(&session_id, cx)
+            .map(|session_modes| {
+                let fs = self.project.read(cx).fs().clone();
+                cx.new(|_cx| ModeSelector::new(session_modes, self.agent.clone(), fs))
+            });
 
         let subscriptions = vec![
             cx.subscribe_in(&thread, window, Self::handle_thread_event),

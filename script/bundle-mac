@@ -47,6 +47,12 @@ done
 
 shift $((OPTIND-1))
 
+if [[ "$target_dir" = "debug" && "$local_install" = true ]]; then
+    echo "Refusing to install a debug build into /Applications."
+    echo "Debug builds start and run slowly; rerun without -d to install an optimized bundle."
+    exit 1
+fi
+
 
 # Get release channel
 pushd crates/zed
@@ -84,8 +90,13 @@ fi
 cargo_target_dir="${CARGO_TARGET_DIR:-target}"
 target_output_dir="${cargo_target_dir}/${target_triple}/${target_dir}"
 
-# Generate the licenses first, so they can be baked into the binaries
-script/generate-licenses
+# Generate the licenses first, so they can be baked into the binaries.
+# Local reinstalls can opt out after a successful generation when only rebundling already-built binaries.
+if [[ "${ZED_SKIP_LICENSE_GENERATION:-}" = "true" ]]; then
+    echo "Skipping license generation because ZED_SKIP_LICENSE_GENERATION=true"
+else
+    script/generate-licenses
+fi
 
 rustup target add $target_triple
 
@@ -98,14 +109,21 @@ cargo build ${build_flag} --package remote_server --target $target_triple
 echo "Creating application bundle"
 pushd crates/zed
 cp Cargo.toml Cargo.toml.backup
+function restore_bundle_manifest() {
+    if [[ -f Cargo.toml.backup ]]; then
+        mv Cargo.toml.backup Cargo.toml
+    fi
+}
+trap restore_bundle_manifest EXIT
 sed \
     -i.backup \
     "s/package.metadata.bundle-${channel}/package.metadata.bundle/" \
     Cargo.toml
 
-app_path=$(cargo bundle ${build_flag} --target $target_triple --select-workspace-root | xargs)
+app_path=$(CARGO_BUNDLE_SKIP_BUILD=true cargo bundle ${build_flag} --target $target_triple --select-workspace-root | xargs)
 
-mv Cargo.toml.backup Cargo.toml
+restore_bundle_manifest
+trap - EXIT
 popd
 echo "Bundled ${app_path}"
 
@@ -247,6 +265,10 @@ function sign_app_binaries() {
             echo "Opening /Applications/$bundle_name"
             open "/Applications/$bundle_name"
         fi
+        if [[ "$target_dir" != "debug" ]]; then
+            echo "Local install requested - skipping DMG creation"
+        fi
+        return
     elif [ "$open_result" = true ]; then
         open "$app_path"
     fi

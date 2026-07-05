@@ -47,6 +47,13 @@ done
 
 shift $((OPTIND-1))
 
+if [[ "$target_dir" = "debug" && "$local_install" = true ]]; then
+    echo "Refusing to install a debug build into /Applications."
+    echo "Debug builds start and run slowly; rerun without -d to install an optimized bundle."
+    exit 1
+fi
+
+
 
 # Get release channel
 pushd crates/zed

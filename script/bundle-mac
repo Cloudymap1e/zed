@@ -62,6 +62,33 @@ function open_from_launch_services() {
         /usr/bin/open "$@"
 }
 
+function resolved_path() {
+    /usr/bin/python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
+}
+
+function verify_local_install() {
+    local installed_path=$1
+    local resolved_installed_path
+    resolved_installed_path=$(resolved_path "$installed_path")
+
+    if [[ "$resolved_installed_path" = "/Volumes/dev" || "$resolved_installed_path" = /Volumes/dev/* ]]; then
+        echo "Installed application bundle resolves to external disk: $resolved_installed_path"
+        exit 1
+    fi
+
+    local expected_version
+    expected_version=$(awk -F'"' '/^version = / { print $2; exit }' crates/zed/Cargo.toml)
+    local installed_version
+    installed_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$installed_path/Contents/Info.plist")
+
+    if [[ -n "$expected_version" && "$installed_version" != "$expected_version" ]]; then
+        echo "Installed application bundle version mismatch: expected $expected_version, got $installed_version"
+        exit 1
+    fi
+
+    codesign --verify --deep --strict "$installed_path"
+}
+
 
 
 # Get release channel
@@ -244,6 +271,7 @@ function sign_app_binaries() {
         rm -rf "/Applications/$bundle_name"
         mv "$app_path" "/Applications/$bundle_name"
         echo "Installed application bundle: /Applications/$bundle_name"
+        verify_local_install "/Applications/$bundle_name"
         if [ "$open_result" = true ]; then
             echo "Opening /Applications/$bundle_name"
             open_from_launch_services "/Applications/$bundle_name"

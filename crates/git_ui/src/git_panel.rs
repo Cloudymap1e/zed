@@ -24,8 +24,9 @@ use git::Oid;
 use git::commit::ParsedCommitMessage;
 use git::repository::{
     Branch, CommitData, CommitDetails, CommitOptions, CommitSummary, DiffType, FetchOptions,
-    GitCommitTemplate, GitCommitter, LogOrder, LogSource, PushOptions, Remote, RemoteCommandOutput,
-    ResetMode, Upstream, UpstreamTracking, UpstreamTrackingStatus, get_git_committer,
+    GitCommitTemplate, GitCommitter, InitialGraphCommitData, LogOrder, LogSource, PushOptions,
+    Remote, RemoteCommandOutput, ResetMode, Upstream, UpstreamTracking, UpstreamTrackingStatus,
+    get_git_committer,
 };
 use git::stash::GitStash;
 use git::status::{DiffStat, StageStatus};
@@ -37,9 +38,10 @@ use git::{
 };
 use gpui::{
     AbsoluteLength, Action, Anchor, AsyncApp, AsyncWindowContext, Bounds, ClickEvent, DismissEvent,
-    Empty, Entity, EventEmitter, FocusHandle, Focusable, KeyContext, MouseButton, MouseDownEvent,
-    Point, PromptLevel, ScrollStrategy, Subscription, Task, TaskExt, TextStyle,
-    UniformListScrollHandle, WeakEntity, actions, anchored, deferred, point, size, uniform_list,
+    Empty, Entity, EventEmitter, FocusHandle, Focusable, Hsla, KeyContext, MouseButton,
+    MouseDownEvent, PathBuilder, Point, PromptLevel, ScrollStrategy, Subscription, Task, TaskExt,
+    TextStyle, UniformListScrollHandle, WeakEntity, actions, anchored, deferred, point, size,
+    uniform_list,
 };
 use itertools::Itertools;
 use language::{Buffer, BufferEvent, File};
@@ -55,7 +57,8 @@ use project::git_store::GitAccess;
 use project::{
     Fs, Project, ProjectPath,
     git_store::{
-        CommitDataState, GitStoreEvent, Repository, RepositoryEvent, RepositoryId, pending_op,
+        CommitDataState, GitGraphEvent, GitStoreEvent, GraphDataResponse, Repository,
+        RepositoryEvent, RepositoryId, pending_op,
     },
     project_settings::{GitPathStyle, ProjectSettings},
 };
@@ -66,7 +69,7 @@ use settings::{
     GitPanelClickBehavior, GitPanelGroupBy, GitPanelSortBy, Settings, SettingsStore, StatusStyle,
     update_settings_file,
 };
-use smallvec::SmallVec;
+use smallvec::{SmallVec, smallvec};
 use std::cell::Cell;
 use std::future::Future;
 use std::ops::Range;
@@ -77,9 +80,9 @@ use strum::{IntoEnumIterator, VariantNames};
 use theme_settings::ThemeSettings;
 use time::OffsetDateTime;
 use ui::{
-    ButtonLike, Checkbox, ContextMenu, ContextMenuEntry, Divider, ElevationIndex,
+    ButtonLike, Checkbox, Chip, ContextMenu, ContextMenuEntry, Divider, ElevationIndex,
     IndentGuideColors, KeyBinding, PopoverMenu, ProjectEmptyState, RenderedIndentGuide, ScrollAxes,
-    Scrollbars, SplitButton, Tab, TintColor, Tooltip, WithScrollbar, prelude::*,
+    ScrollableHandle, Scrollbars, SplitButton, Tab, TintColor, Tooltip, WithScrollbar, prelude::*,
 };
 use util::paths::PathStyle;
 use util::{ResultExt, TryFutureExt, markdown::MarkdownInlineCode, maybe, rel_path::RelPath};
@@ -323,6 +326,15 @@ fn git_panel_view_options_menu(
             })
     })
 }
+
+const INLINE_GRAPH_COMMIT_LIMIT: usize = 500;
+const INLINE_GRAPH_LEFT_PADDING: Pixels = px(8.0);
+const INLINE_GRAPH_LANE_WIDTH: Pixels = px(14.0);
+const INLINE_GRAPH_LINE_WIDTH: Pixels = px(1.5);
+const INLINE_GRAPH_DOT_RADIUS: Pixels = px(3.5);
+const INLINE_GRAPH_DOT_STROKE_WIDTH: Pixels = px(1.5);
+const INLINE_GRAPH_ROW_VERTICAL_PADDING: Pixels = px(4.0);
+const INLINE_GRAPH_SECTION_HEIGHT: f32 = 13.0;
 
 // We only allow a single remote operation at a time to avoid concurrent
 // credential prompts and competing ref/working-tree updates.
@@ -629,6 +641,519 @@ impl TreeViewState {
     }
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct InlineGraphColor(u8);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InlineGraphRefOwnership {
+    None,
+    Local,
+    Remote,
+}
+
+#[derive(Clone, Debug, Default)]
+struct InlineGraphRefContext {
+    local_branches: HashSet<String>,
+    remote_branches: HashSet<String>,
+    remote_names: HashSet<String>,
+}
+
+impl InlineGraphRefContext {
+    fn from_branches(branches: &[Branch]) -> Self {
+        let mut context = Self::default();
+
+        for branch in branches {
+            let name = branch.name().to_string();
+            if branch.is_remote() {
+                if let Some(remote_name) = branch.remote_name() {
+                    context.remote_names.insert(remote_name.to_string());
+                }
+                context.remote_branches.insert(name);
+            } else {
+                context.local_branches.insert(name);
+            }
+        }
+
+        context
+    }
+
+    #[cfg(test)]
+    fn from_branch_names(local_branches: &[&str], remote_branches: &[&str]) -> Self {
+        let mut context = Self::default();
+        context
+            .local_branches
+            .extend(local_branches.iter().map(|branch| branch.to_string()));
+
+        for branch in remote_branches {
+            context.remote_branches.insert(branch.to_string());
+            if let Some((remote_name, _)) = branch.split_once('/') {
+                context.remote_names.insert(remote_name.to_string());
+            }
+        }
+
+        context
+    }
+
+    fn ownership_for_refs(&self, ref_names: &[SharedString]) -> InlineGraphRefOwnership {
+        let mut has_remote_ref = false;
+
+        for ref_name in ref_names {
+            match self.ownership_for_ref(ref_name.as_ref()) {
+                InlineGraphRefOwnership::Local => return InlineGraphRefOwnership::Local,
+                InlineGraphRefOwnership::Remote => has_remote_ref = true,
+                InlineGraphRefOwnership::None => {}
+            }
+        }
+
+        if has_remote_ref {
+            InlineGraphRefOwnership::Remote
+        } else {
+            InlineGraphRefOwnership::None
+        }
+    }
+
+    fn ownership_for_ref(&self, ref_name: &str) -> InlineGraphRefOwnership {
+        if ref_name.starts_with("tag: ") || ref_name.starts_with("refs/tags/") {
+            return InlineGraphRefOwnership::None;
+        }
+
+        if ref_name == "HEAD" {
+            return InlineGraphRefOwnership::Local;
+        }
+
+        let ref_name = ref_name.strip_prefix("HEAD -> ").unwrap_or(ref_name).trim();
+
+        if ref_name.starts_with("refs/heads/") {
+            return InlineGraphRefOwnership::Local;
+        }
+
+        if let Some(remote_ref_name) = ref_name.strip_prefix("refs/remotes/") {
+            return if self.local_branches.contains(remote_ref_name) {
+                InlineGraphRefOwnership::Local
+            } else {
+                InlineGraphRefOwnership::Remote
+            };
+        }
+
+        if self.local_branches.contains(ref_name) {
+            return InlineGraphRefOwnership::Local;
+        }
+
+        if self.remote_branches.contains(ref_name) {
+            return InlineGraphRefOwnership::Remote;
+        }
+
+        if let Some((remote_name, _)) = ref_name.split_once('/')
+            && self.remote_names.contains(remote_name)
+        {
+            return InlineGraphRefOwnership::Remote;
+        }
+
+        InlineGraphRefOwnership::Local
+    }
+}
+
+#[derive(Debug)]
+enum InlineGraphLaneState {
+    Empty,
+    Active {
+        color: Option<InlineGraphColor>,
+        starting_row: usize,
+        starting_col: usize,
+        destination_column: Option<usize>,
+        segments: SmallVec<[InlineGraphLineSegment; 1]>,
+    },
+}
+
+impl InlineGraphLaneState {
+    fn is_empty(&self) -> bool {
+        matches!(self, Self::Empty)
+    }
+
+    fn to_line(
+        &mut self,
+        ending_row: usize,
+        lane_column: usize,
+        parent_column: usize,
+        parent_color: InlineGraphColor,
+    ) -> Option<InlineGraphLine> {
+        let state = std::mem::replace(self, InlineGraphLaneState::Empty);
+
+        let InlineGraphLaneState::Active {
+            color,
+            starting_row,
+            starting_col,
+            destination_column,
+            mut segments,
+        } = state
+        else {
+            return None;
+        };
+
+        let final_destination = destination_column.unwrap_or(parent_column);
+        let final_color = color.unwrap_or(parent_color);
+
+        match segments.last_mut() {
+            Some(InlineGraphLineSegment::Straight { to_row }) if *to_row == usize::MAX => {
+                if final_destination != lane_column {
+                    *to_row = ending_row - 1;
+
+                    let curved_line = InlineGraphLineSegment::Curve {
+                        to_column: final_destination,
+                        on_row: ending_row,
+                        curve_kind: InlineGraphCurveKind::Checkout,
+                    };
+
+                    if *to_row == starting_row {
+                        let last_index = segments.len() - 1;
+                        segments[last_index] = curved_line;
+                    } else {
+                        segments.push(curved_line);
+                    }
+                } else {
+                    *to_row = ending_row;
+                }
+            }
+            Some(InlineGraphLineSegment::Curve {
+                on_row,
+                to_column,
+                curve_kind,
+            }) if *on_row == usize::MAX => {
+                if *to_column == usize::MAX {
+                    *to_column = final_destination;
+                }
+
+                if matches!(curve_kind, InlineGraphCurveKind::Merge) {
+                    *on_row = starting_row + 1;
+                    if *on_row < ending_row {
+                        if *to_column != final_destination {
+                            segments.push(InlineGraphLineSegment::Straight {
+                                to_row: ending_row - 1,
+                            });
+                            segments.push(InlineGraphLineSegment::Curve {
+                                to_column: final_destination,
+                                on_row: ending_row,
+                                curve_kind: InlineGraphCurveKind::Checkout,
+                            });
+                        } else {
+                            segments.push(InlineGraphLineSegment::Straight { to_row: ending_row });
+                        }
+                    } else if *to_column != final_destination {
+                        segments.push(InlineGraphLineSegment::Curve {
+                            to_column: final_destination,
+                            on_row: ending_row,
+                            curve_kind: InlineGraphCurveKind::Checkout,
+                        });
+                    }
+                } else {
+                    *on_row = ending_row;
+                    if *to_column != final_destination {
+                        segments.push(InlineGraphLineSegment::Straight { to_row: ending_row });
+                        segments.push(InlineGraphLineSegment::Curve {
+                            to_column: final_destination,
+                            on_row: ending_row,
+                            curve_kind: InlineGraphCurveKind::Checkout,
+                        });
+                    }
+                }
+            }
+            Some(InlineGraphLineSegment::Curve {
+                on_row, to_column, ..
+            }) => {
+                if *on_row < ending_row {
+                    if *to_column != final_destination {
+                        segments.push(InlineGraphLineSegment::Straight {
+                            to_row: ending_row - 1,
+                        });
+                        segments.push(InlineGraphLineSegment::Curve {
+                            to_column: final_destination,
+                            on_row: ending_row,
+                            curve_kind: InlineGraphCurveKind::Checkout,
+                        });
+                    } else {
+                        segments.push(InlineGraphLineSegment::Straight { to_row: ending_row });
+                    }
+                } else if *to_column != final_destination {
+                    segments.push(InlineGraphLineSegment::Curve {
+                        to_column: final_destination,
+                        on_row: ending_row,
+                        curve_kind: InlineGraphCurveKind::Checkout,
+                    });
+                }
+            }
+            _ => {}
+        }
+
+        Some(InlineGraphLine {
+            child_column: starting_col,
+            full_interval: starting_row..ending_row,
+            color_idx: final_color.0 as usize,
+            segments,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+enum InlineGraphCurveKind {
+    Merge,
+    Checkout,
+}
+
+#[derive(Debug, Clone)]
+enum InlineGraphLineSegment {
+    Straight {
+        to_row: usize,
+    },
+    Curve {
+        to_column: usize,
+        on_row: usize,
+        curve_kind: InlineGraphCurveKind,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct InlineGraphLine {
+    child_column: usize,
+    full_interval: Range<usize>,
+    color_idx: usize,
+    segments: SmallVec<[InlineGraphLineSegment; 1]>,
+}
+
+impl InlineGraphLine {
+    fn first_visible_segment(&self, first_visible_row: usize) -> Option<(usize, usize)> {
+        if first_visible_row > self.full_interval.end {
+            return None;
+        } else if first_visible_row <= self.full_interval.start {
+            return Some((0, self.child_column));
+        }
+
+        let mut current_column = self.child_column;
+
+        for (idx, segment) in self.segments.iter().enumerate() {
+            match segment {
+                InlineGraphLineSegment::Straight { to_row } => {
+                    if *to_row >= first_visible_row {
+                        return Some((idx, current_column));
+                    }
+                }
+                InlineGraphLineSegment::Curve {
+                    to_column, on_row, ..
+                } => {
+                    if *on_row >= first_visible_row {
+                        return Some((idx, current_column));
+                    }
+                    current_column = *to_column;
+                }
+            }
+        }
+
+        None
+    }
+}
+
+#[derive(Clone)]
+struct InlineGraphCommit {
+    data: Arc<InitialGraphCommitData>,
+    lane: usize,
+    color_idx: usize,
+}
+
+#[derive(Clone)]
+struct InlineGraphData {
+    commits: Vec<InlineGraphCommit>,
+    lines: Vec<InlineGraphLine>,
+    max_lanes: usize,
+}
+
+struct InlineGraphBuilder {
+    lane_states: SmallVec<[InlineGraphLaneState; 8]>,
+    lane_colors: HashMap<usize, InlineGraphColor>,
+    parent_to_lanes: HashMap<git::Oid, SmallVec<[usize; 1]>>,
+    next_color: InlineGraphColor,
+    accent_colors_count: usize,
+    ref_context: InlineGraphRefContext,
+    data: InlineGraphData,
+}
+
+impl InlineGraphBuilder {
+    fn build(
+        commits: &[Arc<InitialGraphCommitData>],
+        accent_colors_count: usize,
+        ref_context: InlineGraphRefContext,
+    ) -> InlineGraphData {
+        let mut builder = Self {
+            lane_states: SmallVec::default(),
+            lane_colors: HashMap::default(),
+            parent_to_lanes: HashMap::default(),
+            next_color: InlineGraphColor(0),
+            accent_colors_count: accent_colors_count.max(1),
+            ref_context,
+            data: InlineGraphData {
+                commits: Vec::with_capacity(commits.len()),
+                lines: Vec::with_capacity(commits.len().saturating_sub(1)),
+                max_lanes: 0,
+            },
+        };
+        builder.add_commits(commits);
+        builder.data
+    }
+
+    fn first_empty_lane_idx(&mut self) -> usize {
+        self.lane_states
+            .iter()
+            .position(InlineGraphLaneState::is_empty)
+            .unwrap_or_else(|| {
+                self.lane_states.push(InlineGraphLaneState::Empty);
+                self.lane_states.len() - 1
+            })
+    }
+
+    fn lane_color(&mut self, lane_idx: usize) -> InlineGraphColor {
+        if let Some(color) = self.lane_colors.get(&lane_idx) {
+            *color
+        } else {
+            let color = self.take_next_color();
+            self.lane_colors.insert(lane_idx, color);
+            color
+        }
+    }
+
+    fn take_next_color(&mut self) -> InlineGraphColor {
+        let color = self.next_color;
+        self.next_color =
+            InlineGraphColor((self.next_color.0 + 1) % self.accent_colors_count as u8);
+        color
+    }
+
+    fn take_next_color_distinct_from(&mut self, color: InlineGraphColor) -> InlineGraphColor {
+        for _ in 0..self.accent_colors_count {
+            let next_color = self.take_next_color();
+            if next_color != color {
+                return next_color;
+            }
+        }
+
+        color
+    }
+
+    fn commit_color(
+        &mut self,
+        commit: &InitialGraphCommitData,
+        lane_idx: usize,
+        has_incoming_lane: bool,
+    ) -> InlineGraphColor {
+        let lane_color = self.lane_color(lane_idx);
+
+        if self.ref_context.ownership_for_refs(&commit.ref_names) == InlineGraphRefOwnership::Remote
+            && has_incoming_lane
+        {
+            let color = self.take_next_color_distinct_from(lane_color);
+            self.lane_colors.insert(lane_idx, color);
+            color
+        } else {
+            lane_color
+        }
+    }
+
+    fn add_commits(&mut self, commits: &[Arc<InitialGraphCommitData>]) {
+        for commit in commits {
+            let commit_row = self.data.commits.len();
+            let incoming_lanes = self.parent_to_lanes.remove(&commit.sha);
+            let commit_lane = incoming_lanes
+                .as_ref()
+                .and_then(|lanes| lanes.first().copied())
+                .unwrap_or_else(|| self.first_empty_lane_idx());
+            let has_incoming_lane = incoming_lanes
+                .as_ref()
+                .is_some_and(|lanes| lanes.contains(&commit_lane));
+            let commit_color = self.commit_color(commit, commit_lane, has_incoming_lane);
+
+            if let Some(lanes) = incoming_lanes {
+                for lane_column in lanes {
+                    let state = &mut self.lane_states[lane_column];
+
+                    if let InlineGraphLaneState::Active {
+                        starting_row,
+                        segments,
+                        ..
+                    } = state
+                        && let Some(InlineGraphLineSegment::Curve {
+                            to_column,
+                            curve_kind: InlineGraphCurveKind::Merge,
+                            ..
+                        }) = segments.first_mut()
+                    {
+                        let curve_row = *starting_row + 1;
+                        let would_overlap = if lane_column != commit_lane && curve_row < commit_row
+                        {
+                            self.data.commits[curve_row..commit_row]
+                                .iter()
+                                .any(|commit| commit.lane == commit_lane)
+                        } else {
+                            false
+                        };
+
+                        if would_overlap {
+                            *to_column = lane_column;
+                        }
+                    }
+
+                    if let Some(line) =
+                        state.to_line(commit_row, lane_column, commit_lane, commit_color)
+                    {
+                        self.data.lines.push(line);
+                    }
+                }
+            }
+
+            for (parent_idx, parent) in commit.parents.iter().enumerate() {
+                if parent_idx == 0 {
+                    self.lane_states[commit_lane] = InlineGraphLaneState::Active {
+                        color: Some(commit_color),
+                        starting_col: commit_lane,
+                        starting_row: commit_row,
+                        destination_column: None,
+                        segments: smallvec![InlineGraphLineSegment::Straight {
+                            to_row: usize::MAX
+                        }],
+                    };
+
+                    self.parent_to_lanes
+                        .entry(*parent)
+                        .or_default()
+                        .push(commit_lane);
+                } else {
+                    let new_lane = self.first_empty_lane_idx();
+
+                    self.lane_states[new_lane] = InlineGraphLaneState::Active {
+                        color: None,
+                        starting_col: commit_lane,
+                        starting_row: commit_row,
+                        destination_column: None,
+                        segments: smallvec![InlineGraphLineSegment::Curve {
+                            to_column: usize::MAX,
+                            on_row: usize::MAX,
+                            curve_kind: InlineGraphCurveKind::Merge,
+                        }],
+                    };
+
+                    self.parent_to_lanes
+                        .entry(*parent)
+                        .or_default()
+                        .push(new_lane);
+                }
+            }
+
+            self.data.max_lanes = self.data.max_lanes.max(self.lane_states.len());
+            self.data.commits.push(InlineGraphCommit {
+                data: commit.clone(),
+                lane: commit_lane,
+                color_idx: commit_color.0 as usize,
+            });
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 struct GitTreeStatusEntry {
     entry: GitStatusEntry,
@@ -775,8 +1300,11 @@ pub struct GitPanel {
     pending_serialization: Task<()>,
     pub(crate) project: Entity<Project>,
     scroll_handle: UniformListScrollHandle,
+    graph_scroll_handle: UniformListScrollHandle,
     max_width_item_index: Option<usize>,
     selected_entry: Option<usize>,
+    selected_graph_entry: Option<usize>,
+    graph_expanded: bool,
     marked_entries: Vec<usize>,
     tracked_count: usize,
     tracked_staged_count: usize,
@@ -1030,6 +1558,7 @@ impl GitPanel {
             });
 
             let scroll_handle = UniformListScrollHandle::new();
+            let graph_scroll_handle = UniformListScrollHandle::new();
 
             let mut was_ai_enabled = AgentSettings::get_global(cx).enabled(cx);
             let _settings_subscription = cx.observe_global::<SettingsStore>(move |_, cx| {
@@ -1069,6 +1598,18 @@ impl GitPanel {
                     | GitStoreEvent::ActiveRepositoryChanged(_) => {
                         this.schedule_update(window, cx);
                     }
+                    GitStoreEvent::RepositoryUpdated(
+                        _,
+                        RepositoryEvent::GraphEvent((LogSource::All, LogOrder::DateOrder), event),
+                        true,
+                    ) => match event {
+                        GitGraphEvent::CountUpdated(_)
+                        | GitGraphEvent::FullyLoaded
+                        | GitGraphEvent::LoadingError => {
+                            this.selected_graph_entry = None;
+                            cx.notify()
+                        }
+                    },
                     GitStoreEvent::IndexWriteError(error) => {
                         this.workspace
                             .update(cx, |workspace, cx| {
@@ -1111,8 +1652,11 @@ impl GitPanel {
                 single_tracked_entry: None,
                 project,
                 scroll_handle,
+                graph_scroll_handle,
                 max_width_item_index: None,
                 selected_entry: None,
+                selected_graph_entry: None,
+                graph_expanded: true,
                 marked_entries: Vec::new(),
                 tracked_count: 0,
                 tracked_staged_count: 0,
@@ -4223,6 +4767,7 @@ impl GitPanel {
         self.tracked_staged_count = 0;
         self.entry_count = 0;
         self.max_width_item_index = None;
+        self.selected_graph_entry = None;
         self.git_access = GitAccess::Yes;
 
         let settings = GitPanelSettings::get_global(cx);
@@ -6487,6 +7032,601 @@ impl GitPanel {
             )
     }
 
+    fn inline_graph_row_height(window: &Window) -> Pixels {
+        let raw = window.text_style().line_height_in_pixels(window.rem_size())
+            + INLINE_GRAPH_ROW_VERTICAL_PADDING;
+        let scale = window.scale_factor();
+        (raw * scale).round() / scale
+    }
+
+    fn inline_graph_width(max_lanes: usize) -> Pixels {
+        INLINE_GRAPH_LEFT_PADDING * 2.0 + INLINE_GRAPH_LANE_WIDTH * max_lanes.max(2) as f32
+    }
+
+    fn inline_graph_lane_center_x(bounds: Bounds<Pixels>, lane: f32) -> Pixels {
+        bounds.origin.x
+            + INLINE_GRAPH_LEFT_PADDING
+            + lane * INLINE_GRAPH_LANE_WIDTH
+            + INLINE_GRAPH_LANE_WIDTH / 2.0
+    }
+
+    fn inline_graph_row_center_y(
+        row: usize,
+        row_height: Pixels,
+        scroll_offset: Pixels,
+        bounds: Bounds<Pixels>,
+    ) -> Pixels {
+        bounds.origin.y + row as f32 * row_height + row_height / 2.0 - scroll_offset
+    }
+
+    fn draw_inline_graph_dot(center_x: Pixels, center_y: Pixels, color: Hsla, window: &mut Window) {
+        let radius = INLINE_GRAPH_DOT_RADIUS;
+        let mut builder = PathBuilder::fill();
+        builder.move_to(point(center_x + radius, center_y));
+        builder.arc_to(
+            point(radius, radius),
+            px(0.),
+            false,
+            true,
+            point(center_x - radius, center_y),
+        );
+        builder.arc_to(
+            point(radius, radius),
+            px(0.),
+            false,
+            true,
+            point(center_x + radius, center_y),
+        );
+        builder.close();
+
+        if let Ok(path) = builder.build() {
+            window.paint_path(path, color);
+        }
+    }
+
+    fn render_inline_graph_canvas(
+        &self,
+        graph: Arc<InlineGraphData>,
+        window: &Window,
+        _cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let row_height = Self::inline_graph_row_height(window);
+        let viewport_height = self
+            .graph_scroll_handle
+            .0
+            .borrow()
+            .last_item_size
+            .map(|size| size.item.height)
+            .unwrap_or_else(|| window.viewport_size().height);
+        let loaded_commit_count = graph.commits.len();
+        let content_height = row_height * loaded_commit_count;
+        let max_scroll = (content_height - viewport_height).max(px(0.));
+        let scroll_offset_y = (-self.graph_scroll_handle.offset().y).clamp(px(0.), max_scroll);
+        let first_visible_row = (scroll_offset_y / row_height).floor() as usize;
+        let vertical_scroll_offset = scroll_offset_y - first_visible_row as f32 * row_height;
+        let last_visible_row =
+            first_visible_row + (viewport_height / row_height).ceil() as usize + 1;
+        let viewport_range = first_visible_row.min(loaded_commit_count.saturating_sub(1))
+            ..last_visible_row.min(loaded_commit_count);
+        let rows = graph.commits[viewport_range.clone()].to_vec();
+        let lines = graph
+            .lines
+            .iter()
+            .filter(|line| {
+                line.full_interval.start <= viewport_range.end
+                    && line.full_interval.end >= viewport_range.start
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let graph_width = Self::inline_graph_width(graph.max_lanes);
+
+        gpui::canvas(
+            move |_bounds, _window, _cx| {},
+            move |bounds: Bounds<Pixels>, _: (), window: &mut Window, cx: &mut App| {
+                let accent_colors = cx.theme().accents();
+                let mut lines_by_color: BTreeMap<usize, Vec<PathBuilder>> = BTreeMap::new();
+
+                for line in &lines {
+                    let Some((start_segment_idx, start_column)) =
+                        line.first_visible_segment(first_visible_row)
+                    else {
+                        continue;
+                    };
+
+                    let line_x = Self::inline_graph_lane_center_x(bounds, start_column as f32);
+                    let start_row = line.full_interval.start as i32 - first_visible_row as i32;
+                    let from_y = bounds.origin.y + start_row as f32 * row_height + row_height / 2.0
+                        - vertical_scroll_offset
+                        + INLINE_GRAPH_DOT_RADIUS;
+                    let mut current_row = from_y;
+                    let mut current_column = line_x;
+                    let mut builder = PathBuilder::stroke(INLINE_GRAPH_LINE_WIDTH);
+                    builder.move_to(point(line_x, from_y));
+
+                    let desired_curve_height = row_height / 3.0;
+                    let desired_curve_width = INLINE_GRAPH_LANE_WIDTH / 3.0;
+
+                    for (segment_idx, segment) in
+                        line.segments[start_segment_idx..].iter().enumerate()
+                    {
+                        let is_last = segment_idx + start_segment_idx + 1 == line.segments.len();
+
+                        match segment {
+                            InlineGraphLineSegment::Straight { to_row } => {
+                                let mut dest_row = Self::inline_graph_row_center_y(
+                                    to_row - first_visible_row,
+                                    row_height,
+                                    vertical_scroll_offset,
+                                    bounds,
+                                );
+                                if is_last {
+                                    dest_row -= INLINE_GRAPH_DOT_RADIUS;
+                                }
+
+                                let dest_point = point(current_column, dest_row);
+                                current_row = dest_point.y;
+                                builder.line_to(dest_point);
+                                builder.move_to(dest_point);
+                            }
+                            InlineGraphLineSegment::Curve {
+                                to_column,
+                                on_row,
+                                curve_kind,
+                            } => {
+                                let mut to_column =
+                                    Self::inline_graph_lane_center_x(bounds, *to_column as f32);
+                                let mut to_row = Self::inline_graph_row_center_y(
+                                    on_row - first_visible_row,
+                                    row_height,
+                                    vertical_scroll_offset,
+                                    bounds,
+                                );
+                                let going_right = to_column > current_column;
+                                let column_shift = if going_right {
+                                    INLINE_GRAPH_DOT_RADIUS + INLINE_GRAPH_DOT_STROKE_WIDTH
+                                } else {
+                                    -INLINE_GRAPH_DOT_RADIUS - INLINE_GRAPH_DOT_STROKE_WIDTH
+                                };
+
+                                match curve_kind {
+                                    InlineGraphCurveKind::Checkout => {
+                                        if is_last {
+                                            to_column -= column_shift;
+                                        }
+
+                                        let available_curve_width =
+                                            (to_column - current_column).abs();
+                                        let available_curve_height = (to_row - current_row).abs();
+                                        let curve_width =
+                                            desired_curve_width.min(available_curve_width);
+                                        let curve_height =
+                                            desired_curve_height.min(available_curve_height);
+                                        let signed_curve_width = if going_right {
+                                            curve_width
+                                        } else {
+                                            -curve_width
+                                        };
+                                        let curve_start =
+                                            point(current_column, to_row - curve_height);
+                                        let curve_end =
+                                            point(current_column + signed_curve_width, to_row);
+                                        let curve_control = point(current_column, to_row);
+
+                                        builder.move_to(point(current_column, current_row));
+                                        builder.line_to(curve_start);
+                                        builder.move_to(curve_start);
+                                        builder.curve_to(curve_end, curve_control);
+                                        builder.move_to(curve_end);
+                                        builder.line_to(point(to_column, to_row));
+                                    }
+                                    InlineGraphCurveKind::Merge => {
+                                        if is_last {
+                                            to_row -= INLINE_GRAPH_DOT_RADIUS;
+                                        }
+
+                                        let merge_start = point(
+                                            current_column + column_shift,
+                                            current_row - INLINE_GRAPH_DOT_RADIUS,
+                                        );
+                                        let available_curve_width =
+                                            (to_column - merge_start.x).abs();
+                                        let available_curve_height = (to_row - merge_start.y).abs();
+                                        let curve_width =
+                                            desired_curve_width.min(available_curve_width);
+                                        let curve_height =
+                                            desired_curve_height.min(available_curve_height);
+                                        let signed_curve_width = if going_right {
+                                            curve_width
+                                        } else {
+                                            -curve_width
+                                        };
+                                        let curve_start =
+                                            point(to_column - signed_curve_width, merge_start.y);
+                                        let curve_end =
+                                            point(to_column, merge_start.y + curve_height);
+                                        let curve_control = point(to_column, merge_start.y);
+
+                                        builder.move_to(merge_start);
+                                        builder.line_to(curve_start);
+                                        builder.move_to(curve_start);
+                                        builder.curve_to(curve_end, curve_control);
+                                        builder.move_to(curve_end);
+                                        builder.line_to(point(to_column, to_row));
+                                    }
+                                }
+                                current_row = to_row;
+                                current_column = to_column;
+                                builder.move_to(point(current_column, current_row));
+                            }
+                        }
+                    }
+
+                    builder.close();
+                    lines_by_color
+                        .entry(line.color_idx)
+                        .or_default()
+                        .push(builder);
+                }
+
+                window.paint_layer(bounds, |window| {
+                    for (color_idx, builders) in lines_by_color {
+                        let color = accent_colors.color_for_index(color_idx as u32);
+                        for builder in builders {
+                            if let Ok(path) = builder.build() {
+                                window.paint_path(path, color);
+                            }
+                        }
+                    }
+
+                    for (row_idx, row) in rows.iter().enumerate() {
+                        let row_color = accent_colors.color_for_index(row.color_idx as u32);
+                        let row_y_center =
+                            bounds.origin.y + row_idx as f32 * row_height + row_height / 2.0
+                                - vertical_scroll_offset;
+                        let commit_x = Self::inline_graph_lane_center_x(bounds, row.lane as f32);
+                        Self::draw_inline_graph_dot(commit_x, row_y_center, row_color, window);
+                    }
+                });
+            },
+        )
+        .w(graph_width)
+        .h_full()
+    }
+
+    fn render_inline_graph_row(
+        &self,
+        ix: usize,
+        row: &InlineGraphCommit,
+        repo: Entity<Repository>,
+        graph_width: Pixels,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let row_height = Self::inline_graph_row_height(window);
+        let data = repo.update(cx, |repository, cx| {
+            repository
+                .fetch_commit_data(row.data.sha, false, cx)
+                .clone()
+        });
+
+        let (subject, author_name) = match data {
+            CommitDataState::Loaded(data) => (data.subject.clone(), data.author_name.clone()),
+            CommitDataState::Loading(_) => ("Loading…".into(), SharedString::default()),
+        };
+        let full_sha = row.data.sha.to_string();
+        let short_sha = row.data.sha.display_short().to_string();
+        let is_selected = self.selected_graph_entry == Some(ix);
+        let weak_panel = cx.weak_entity();
+        let workspace = self.workspace.clone();
+        let repo = repo.downgrade();
+        let tooltip_subject = subject.clone();
+        let tooltip_sha = full_sha.clone();
+
+        h_flex()
+            .id(ElementId::NamedInteger(
+                "git-panel-inline-graph-row".into(),
+                ix as u64,
+            ))
+            .h(row_height)
+            .w_full()
+            .min_w_0()
+            .pl(graph_width + px(4.0))
+            .pr_2()
+            .gap_1()
+            .cursor_pointer()
+            .when(is_selected, |this| {
+                this.bg(cx.theme().colors().element_selected.opacity(0.65))
+            })
+            .hover(|this| this.bg(cx.theme().colors().element_hover.opacity(0.6)))
+            .child(
+                h_flex()
+                    .min_w_0()
+                    .flex_1()
+                    .gap_1()
+                    .children(row.data.ref_names.iter().take(1).map(|name| {
+                        Chip::new(name.clone())
+                            .height(px(18.0))
+                            .truncate()
+                            .bg_color(cx.theme().colors().element_background)
+                            .border_color(cx.theme().colors().border_variant)
+                    }))
+                    .child(
+                        Label::new(subject.clone())
+                            .size(LabelSize::Small)
+                            .truncate(),
+                    ),
+            )
+            .when(!author_name.is_empty(), |this| {
+                this.child(
+                    Label::new(author_name)
+                        .size(LabelSize::Small)
+                        .color(Color::Muted)
+                        .truncate(),
+                )
+            })
+            .child(
+                Label::new(short_sha)
+                    .size(LabelSize::XSmall)
+                    .color(Color::Muted)
+                    .flex_none(),
+            )
+            .tooltip(move |_window, cx| {
+                Tooltip::with_meta(tooltip_subject.clone(), None, tooltip_sha.clone(), cx)
+            })
+            .on_click(move |event, window, cx| {
+                weak_panel
+                    .update(cx, |this, cx| {
+                        this.selected_graph_entry = Some(ix);
+                        cx.notify();
+                    })
+                    .ok();
+
+                if event.click_count() >= 2 {
+                    CommitView::open(
+                        full_sha.clone(),
+                        repo.clone(),
+                        workspace.clone(),
+                        None,
+                        None,
+                        window,
+                        cx,
+                    );
+                }
+            })
+            .into_any_element()
+    }
+
+    fn render_inline_graph(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if matches!(self.git_access, GitAccess::No) {
+            return None;
+        }
+
+        let active_repository = self.active_repository.clone()?;
+        let (commits, is_loading, error, ref_context) =
+            active_repository.update(cx, |repository, cx| {
+                let GraphDataResponse {
+                    commits,
+                    is_loading,
+                    error,
+                } = repository.graph_data(
+                    LogSource::All,
+                    LogOrder::DateOrder,
+                    0..INLINE_GRAPH_COMMIT_LIMIT,
+                    cx,
+                );
+                (
+                    commits.to_vec(),
+                    is_loading,
+                    error,
+                    InlineGraphRefContext::from_branches(&repository.branch_list),
+                )
+            });
+        let loaded_count = commits.len();
+        let graph = Arc::new(InlineGraphBuilder::build(
+            &commits,
+            cx.theme().accents().0.len(),
+            ref_context,
+        ));
+        let graph_width = Self::inline_graph_width(graph.max_lanes);
+        let repo = active_repository.downgrade();
+        let graph_rows = graph.clone();
+        let row_graph_width = graph_width;
+        let is_expanded = self.graph_expanded;
+        let row_count = graph.commits.len();
+
+        let header = h_flex()
+            .h(rems(2.0))
+            .w_full()
+            .px_2()
+            .justify_between()
+            .border_t_1()
+            .border_b_1()
+            .border_color(cx.theme().colors().border)
+            .child(
+                h_flex()
+                    .id("git-panel-inline-graph-toggle")
+                    .gap_1()
+                    .cursor_pointer()
+                    .child(
+                        Icon::new(if is_expanded {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .size(IconSize::XSmall)
+                        .color(Color::Muted),
+                    )
+                    .child(
+                        Label::new("GRAPH")
+                            .color(Color::Muted)
+                            .size(LabelSize::Small),
+                    )
+                    .when(loaded_count > 0, |this| {
+                        this.child(
+                            Label::new(loaded_count.to_string())
+                                .color(Color::Muted)
+                                .size(LabelSize::XSmall),
+                        )
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.graph_expanded = !this.graph_expanded;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                h_flex()
+                    .gap_0p5()
+                    .child(
+                        ButtonLike::new("git-panel-inline-graph-auto")
+                            .style(ButtonStyle::Subtle)
+                            .child(
+                                h_flex()
+                                    .gap_0p5()
+                                    .child(
+                                        Icon::new(IconName::GitBranch)
+                                            .size(IconSize::XSmall)
+                                            .color(Color::Muted),
+                                    )
+                                    .child(
+                                        Label::new("Auto")
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted),
+                                    ),
+                            )
+                            .tooltip(|_window, cx| {
+                                Tooltip::with_meta(
+                                    "Open Git Graph",
+                                    Some(&crate::git_graph::Open),
+                                    "Showing all refs",
+                                    cx,
+                                )
+                            })
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(crate::git_graph::Open.boxed_clone(), cx)
+                            }),
+                    )
+                    .child(
+                        IconButton::new("git-panel-inline-graph-open", IconName::GitGraph)
+                            .icon_size(IconSize::Small)
+                            .tooltip(|_window, cx| {
+                                Tooltip::for_action("Open Git Graph", &crate::git_graph::Open, cx)
+                            })
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(crate::git_graph::Open.boxed_clone(), cx)
+                            }),
+                    ),
+            );
+
+        let content = if let Some(error) = error {
+            div()
+                .h(rems(INLINE_GRAPH_SECTION_HEIGHT))
+                .w_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    Label::new(format!("Error loading graph: {error}"))
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
+                )
+                .into_any_element()
+        } else if row_count == 0 {
+            div()
+                .h(rems(INLINE_GRAPH_SECTION_HEIGHT))
+                .w_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .gap_1()
+                .child(
+                    Label::new(if is_loading {
+                        "Loading commits…"
+                    } else {
+                        "No commits found"
+                    })
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+                )
+                .when(is_loading, |this| {
+                    this.child(Icon::new(IconName::LoadCircle).size(IconSize::Small))
+                })
+                .into_any_element()
+        } else {
+            h_flex()
+                .relative()
+                .h(rems(INLINE_GRAPH_SECTION_HEIGHT))
+                .w_full()
+                .overflow_hidden()
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .bottom_0()
+                        .w(graph_width)
+                        .child(self.render_inline_graph_canvas(graph.clone(), window, cx)),
+                )
+                .child(
+                    uniform_list(
+                        "git-panel-inline-graph-list",
+                        row_count,
+                        cx.processor(move |this, range: Range<usize>, window, cx| {
+                            let Some(repo) = repo.upgrade() else {
+                                return Vec::new();
+                            };
+
+                            repo.update(cx, |repository, cx| {
+                                for row in &graph_rows.commits[range.start..range.end] {
+                                    repository.fetch_commit_data(row.data.sha, false, cx);
+                                }
+                            });
+
+                            range
+                                .filter_map(|ix| {
+                                    graph_rows.commits.get(ix).map(|row| {
+                                        this.render_inline_graph_row(
+                                            ix,
+                                            row,
+                                            repo.clone(),
+                                            row_graph_width,
+                                            window,
+                                            cx,
+                                        )
+                                    })
+                                })
+                                .collect()
+                        }),
+                    )
+                    .size_full()
+                    .track_scroll(&self.graph_scroll_handle),
+                )
+                .custom_scrollbars(
+                    Scrollbars::for_settings::<GitPanelScrollbarAccessor>()
+                        .tracked_scroll_handle(&self.graph_scroll_handle)
+                        .with_track_along(
+                            ScrollAxes::Vertical,
+                            cx.theme().colors().panel_background,
+                        ),
+                    window,
+                    cx,
+                )
+                .into_any_element()
+        };
+
+        Some(
+            v_flex()
+                .w_full()
+                .flex_none()
+                .child(header)
+                .when(is_expanded, |this| this.child(content))
+                .into_any_element(),
+        )
+    }
+
     fn entry_label(&self, label: impl Into<SharedString>, color: Color) -> Label {
         Label::new(label.into()).color(color)
     }
@@ -7374,6 +8514,7 @@ impl Render for GitPanel {
                                     }
                                 })
                             })
+                            .children(self.render_inline_graph(window, cx))
                             .children(self.render_footer(window, cx))
                             .when(self.amend_pending, |this| {
                                 this.child(self.render_pending_amend(cx))
@@ -8104,14 +9245,17 @@ pub(crate) fn commit_title_exceeds_limit(title: &str, max_length: usize) -> bool
 #[cfg(test)]
 mod tests {
     use git::{
-        repository::repo_path,
+        Oid,
+        repository::{InitialGraphCommitData, repo_path},
         status::{StatusCode, UnmergedStatus, UnmergedStatusCode},
     };
     use gpui::{TestAppContext, UpdateGlobal, VisualTestContext, px};
     use indoc::indoc;
     use project::FakeFs;
+    use rand::prelude::*;
     use serde_json::json;
     use settings::SettingsStore;
+    use smallvec::smallvec;
     use theme::LoadThemes;
     use util::path;
     use util::rel_path::rel_path;
@@ -8452,7 +9596,9 @@ mod tests {
             "commit<th",
             "ink>Need to reason",
             " about the diff</thi",
-            "nk> messages\n\nPreserve <thi",
+            "nk> messages
+
+Preserve <thi",
             "s literal text",
         ] {
             sanitized.push_str(&sanitizer.sanitize_chunk(chunk));
@@ -8461,7 +9607,209 @@ mod tests {
 
         assert_eq!(
             sanitized,
-            "Fix generated commit messages\n\nPreserve <this literal text"
+            "Fix generated commit messages
+
+Preserve <this literal text"
+        );
+    }
+
+    #[test]
+    fn test_inline_graph_linear_history_stays_on_one_lane() {
+        let mut rng = StdRng::seed_from_u64(1);
+        let first = Oid::random(&mut rng);
+        let second = Oid::random(&mut rng);
+        let third = Oid::random(&mut rng);
+        let commits = vec![
+            Arc::new(InitialGraphCommitData {
+                sha: first,
+                parents: smallvec![second],
+                ref_names: vec!["HEAD -> main".into()],
+            }),
+            Arc::new(InitialGraphCommitData {
+                sha: second,
+                parents: smallvec![third],
+                ref_names: Vec::new(),
+            }),
+            Arc::new(InitialGraphCommitData {
+                sha: third,
+                parents: smallvec![],
+                ref_names: Vec::new(),
+            }),
+        ];
+
+        let graph = InlineGraphBuilder::build(&commits, 8, InlineGraphRefContext::default());
+
+        assert_eq!(graph.commits.len(), 3);
+        assert_eq!(
+            graph
+                .commits
+                .iter()
+                .map(|commit| commit.lane)
+                .collect::<Vec<_>>(),
+            vec![0, 0, 0]
+        );
+        assert_eq!(
+            graph
+                .commits
+                .iter()
+                .map(|commit| commit.color_idx)
+                .collect::<Vec<_>>(),
+            vec![0, 0, 0]
+        );
+        assert_eq!(graph.lines.len(), 2);
+        assert_eq!(graph.max_lanes, 1);
+    }
+
+    #[test]
+    fn test_inline_graph_remote_ref_ownership_recolors_linear_history() {
+        let mut rng = StdRng::seed_from_u64(11);
+        let head = Oid::random(&mut rng);
+        let local_master = Oid::random(&mut rng);
+        let remote_master = Oid::random(&mut rng);
+        let ancestor = Oid::random(&mut rng);
+        let commits = vec![
+            Arc::new(InitialGraphCommitData {
+                sha: head,
+                parents: smallvec![local_master],
+                ref_names: vec!["HEAD -> codex/align".into(), "fork/codex/align".into()],
+            }),
+            Arc::new(InitialGraphCommitData {
+                sha: local_master,
+                parents: smallvec![remote_master],
+                ref_names: vec!["master".into()],
+            }),
+            Arc::new(InitialGraphCommitData {
+                sha: remote_master,
+                parents: smallvec![ancestor],
+                ref_names: vec![
+                    "origin/master".into(),
+                    "origin/HEAD".into(),
+                    "fork/master".into(),
+                    "fork/HEAD".into(),
+                ],
+            }),
+            Arc::new(InitialGraphCommitData {
+                sha: ancestor,
+                parents: smallvec![],
+                ref_names: Vec::new(),
+            }),
+        ];
+        let ref_context = InlineGraphRefContext::from_branch_names(
+            &["codex/align", "master"],
+            &[
+                "fork/codex/align",
+                "origin/master",
+                "origin/HEAD",
+                "fork/master",
+                "fork/HEAD",
+            ],
+        );
+
+        let graph = InlineGraphBuilder::build(&commits, 8, ref_context);
+
+        assert_eq!(
+            graph
+                .commits
+                .iter()
+                .map(|commit| commit.lane)
+                .collect::<Vec<_>>(),
+            vec![0, 0, 0, 0]
+        );
+        assert_eq!(
+            graph
+                .commits
+                .iter()
+                .map(|commit| commit.color_idx)
+                .collect::<Vec<_>>(),
+            vec![0, 0, 1, 1]
+        );
+        assert_eq!(
+            graph
+                .lines
+                .iter()
+                .map(|line| line.color_idx)
+                .collect::<Vec<_>>(),
+            vec![0, 0, 1]
+        );
+    }
+
+    #[test]
+    fn test_inline_graph_tags_do_not_change_ref_ownership_color() {
+        let mut rng = StdRng::seed_from_u64(12);
+        let head = Oid::random(&mut rng);
+        let tagged = Oid::random(&mut rng);
+        let ancestor = Oid::random(&mut rng);
+        let commits = vec![
+            Arc::new(InitialGraphCommitData {
+                sha: head,
+                parents: smallvec![tagged],
+                ref_names: vec!["HEAD -> main".into()],
+            }),
+            Arc::new(InitialGraphCommitData {
+                sha: tagged,
+                parents: smallvec![ancestor],
+                ref_names: vec!["tag: v0.11.6".into()],
+            }),
+            Arc::new(InitialGraphCommitData {
+                sha: ancestor,
+                parents: smallvec![],
+                ref_names: Vec::new(),
+            }),
+        ];
+        let ref_context = InlineGraphRefContext::from_branch_names(&["main"], &[]);
+
+        let graph = InlineGraphBuilder::build(&commits, 8, ref_context);
+
+        assert_eq!(
+            graph
+                .commits
+                .iter()
+                .map(|commit| commit.color_idx)
+                .collect::<Vec<_>>(),
+            vec![0, 0, 0]
+        );
+    }
+
+    #[test]
+    fn test_inline_graph_merge_history_allocates_branch_lane() {
+        let mut rng = StdRng::seed_from_u64(2);
+        let merge = Oid::random(&mut rng);
+        let first_parent = Oid::random(&mut rng);
+        let second_parent = Oid::random(&mut rng);
+        let root = Oid::random(&mut rng);
+        let commits = vec![
+            Arc::new(InitialGraphCommitData {
+                sha: merge,
+                parents: smallvec![first_parent, second_parent],
+                ref_names: vec!["HEAD -> feature".into()],
+            }),
+            Arc::new(InitialGraphCommitData {
+                sha: first_parent,
+                parents: smallvec![root],
+                ref_names: Vec::new(),
+            }),
+            Arc::new(InitialGraphCommitData {
+                sha: second_parent,
+                parents: smallvec![root],
+                ref_names: Vec::new(),
+            }),
+            Arc::new(InitialGraphCommitData {
+                sha: root,
+                parents: smallvec![],
+                ref_names: Vec::new(),
+            }),
+        ];
+
+        let graph = InlineGraphBuilder::build(&commits, 8, InlineGraphRefContext::default());
+
+        assert_eq!(graph.commits.len(), 4);
+        assert!(graph.max_lanes >= 2);
+        assert_eq!(graph.lines.len(), 4);
+        assert!(
+            graph
+                .lines
+                .iter()
+                .all(|line| line.full_interval.start < line.full_interval.end)
         );
     }
 

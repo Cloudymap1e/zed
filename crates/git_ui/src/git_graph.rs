@@ -3,7 +3,7 @@ use crate::{
     commit_view::CommitView,
     git_status_icon,
 };
-use collections::{BTreeMap, HashMap, IndexSet};
+use collections::{BTreeMap, HashMap, HashSet, IndexSet};
 use editor::Editor;
 use file_icons::FileIcons;
 use git::{
@@ -11,7 +11,7 @@ use git::{
     commit::ParsedCommitMessage,
     parse_git_remote_url,
     repository::{
-        CommitDiff, CommitFile, InitialGraphCommitData, LogOrder, LogSource, RepoPath,
+        Branch, CommitDiff, CommitFile, InitialGraphCommitData, LogOrder, LogSource, RepoPath,
         SearchCommitArgs,
     },
     status::{FileStatus, StatusCode, TrackedStatus},
@@ -651,8 +651,117 @@ fn accent_colors_count(accents: &AccentColors) -> usize {
     accents.0.len()
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 struct BranchColor(u8);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RefOwnership {
+    None,
+    Local,
+    Remote,
+}
+
+#[derive(Clone, Debug, Default)]
+struct RefOwnershipContext {
+    local_branches: HashSet<String>,
+    remote_branches: HashSet<String>,
+    remote_names: HashSet<String>,
+}
+
+impl RefOwnershipContext {
+    fn from_branches(branches: &[Branch]) -> Self {
+        let mut context = Self::default();
+
+        for branch in branches {
+            let name = branch.name().to_string();
+            if branch.is_remote() {
+                if let Some(remote_name) = branch.remote_name() {
+                    context.remote_names.insert(remote_name.to_string());
+                }
+                context.remote_branches.insert(name);
+            } else {
+                context.local_branches.insert(name);
+            }
+        }
+
+        context
+    }
+
+    #[cfg(test)]
+    fn from_branch_names(local_branches: &[&str], remote_branches: &[&str]) -> Self {
+        let mut context = Self::default();
+        context
+            .local_branches
+            .extend(local_branches.iter().map(|branch| branch.to_string()));
+
+        for branch in remote_branches {
+            context.remote_branches.insert(branch.to_string());
+            if let Some((remote_name, _)) = branch.split_once('/') {
+                context.remote_names.insert(remote_name.to_string());
+            }
+        }
+
+        context
+    }
+
+    fn ownership_for_refs(&self, ref_names: &[SharedString]) -> RefOwnership {
+        let mut has_remote_ref = false;
+
+        for ref_name in ref_names {
+            match self.ownership_for_ref(ref_name.as_ref()) {
+                RefOwnership::Local => return RefOwnership::Local,
+                RefOwnership::Remote => has_remote_ref = true,
+                RefOwnership::None => {}
+            }
+        }
+
+        if has_remote_ref {
+            RefOwnership::Remote
+        } else {
+            RefOwnership::None
+        }
+    }
+
+    fn ownership_for_ref(&self, ref_name: &str) -> RefOwnership {
+        if ref_name.starts_with("tag: ") || ref_name.starts_with("refs/tags/") {
+            return RefOwnership::None;
+        }
+
+        if ref_name == "HEAD" {
+            return RefOwnership::Local;
+        }
+
+        let ref_name = ref_name.strip_prefix("HEAD -> ").unwrap_or(ref_name).trim();
+
+        if ref_name.starts_with("refs/heads/") {
+            return RefOwnership::Local;
+        }
+
+        if let Some(remote_ref_name) = ref_name.strip_prefix("refs/remotes/") {
+            return if self.local_branches.contains(remote_ref_name) {
+                RefOwnership::Local
+            } else {
+                RefOwnership::Remote
+            };
+        }
+
+        if self.local_branches.contains(ref_name) {
+            return RefOwnership::Local;
+        }
+
+        if self.remote_branches.contains(ref_name) {
+            return RefOwnership::Remote;
+        }
+
+        if let Some((remote_name, _)) = ref_name.split_once('/')
+            && self.remote_names.contains(remote_name)
+        {
+            return RefOwnership::Remote;
+        }
+
+        RefOwnership::Local
+    }
+}
 
 #[derive(Debug)]
 enum LaneState {
@@ -904,6 +1013,7 @@ struct GraphData {
     parent_to_lanes: HashMap<Oid, SmallVec<[usize; 1]>>,
     next_color: BranchColor,
     accent_colors_count: usize,
+    ref_context: RefOwnershipContext,
     commits: Vec<Rc<CommitEntry>>,
     max_commit_count: AllCommitCount,
     max_lanes: usize,
@@ -920,6 +1030,7 @@ impl GraphData {
             parent_to_lanes: HashMap::default(),
             next_color: BranchColor(0),
             accent_colors_count,
+            ref_context: RefOwnershipContext::default(),
             commits: Vec::default(),
             max_commit_count: AllCommitCount::NotLoaded,
             max_lanes: 0,
@@ -942,6 +1053,10 @@ impl GraphData {
         self.max_lanes = 0;
     }
 
+    fn set_ref_context(&mut self, ref_context: RefOwnershipContext) {
+        self.ref_context = ref_context;
+    }
+
     fn first_empty_lane_idx(&mut self) -> ActiveLaneIdx {
         self.lane_states
             .iter()
@@ -953,12 +1068,49 @@ impl GraphData {
     }
 
     fn get_lane_color(&mut self, lane_idx: ActiveLaneIdx) -> BranchColor {
-        let accent_colors_count = self.accent_colors_count;
-        *self.lane_colors.entry(lane_idx).or_insert_with(|| {
-            let color_idx = self.next_color;
-            self.next_color = BranchColor((self.next_color.0 + 1) % accent_colors_count as u8);
-            color_idx
-        })
+        if let Some(color) = self.lane_colors.get(&lane_idx) {
+            *color
+        } else {
+            let color = self.take_next_color();
+            self.lane_colors.insert(lane_idx, color);
+            color
+        }
+    }
+
+    fn take_next_color(&mut self) -> BranchColor {
+        let color = self.next_color;
+        self.next_color = BranchColor((self.next_color.0 + 1) % self.accent_colors_count as u8);
+        color
+    }
+
+    fn take_next_color_distinct_from(&mut self, color: BranchColor) -> BranchColor {
+        for _ in 0..self.accent_colors_count {
+            let next_color = self.take_next_color();
+            if next_color != color {
+                return next_color;
+            }
+        }
+
+        color
+    }
+
+    fn commit_color(
+        &mut self,
+        commit: &InitialGraphCommitData,
+        lane_idx: ActiveLaneIdx,
+        has_incoming_lane: bool,
+    ) -> BranchColor {
+        let lane_color = self.get_lane_color(lane_idx);
+
+        if self.ref_context.ownership_for_refs(&commit.ref_names) == RefOwnership::Remote
+            && has_incoming_lane
+        {
+            let color = self.take_next_color_distinct_from(lane_color);
+            self.lane_colors.insert(lane_idx, color);
+            color
+        } else {
+            lane_color
+        }
     }
 
     fn add_commits(&mut self, commits: &[Arc<InitialGraphCommitData>]) {
@@ -967,17 +1119,17 @@ impl GraphData {
 
         for commit in commits.iter() {
             let commit_row = self.commits.len();
+            let incoming_lanes = self.parent_to_lanes.remove(&commit.sha);
+            let commit_lane = incoming_lanes
+                .as_ref()
+                .and_then(|lanes| lanes.first().copied())
+                .unwrap_or_else(|| self.first_empty_lane_idx());
+            let has_incoming_lane = incoming_lanes
+                .as_ref()
+                .is_some_and(|lanes| lanes.contains(&commit_lane));
+            let commit_color = self.commit_color(commit, commit_lane, has_incoming_lane);
 
-            let commit_lane = self
-                .parent_to_lanes
-                .get(&commit.sha)
-                .and_then(|lanes| lanes.iter().min().copied());
-
-            let commit_lane = commit_lane.unwrap_or_else(|| self.first_empty_lane_idx());
-
-            let commit_color = self.get_lane_color(commit_lane);
-
-            if let Some(lanes) = self.parent_to_lanes.remove(&commit.sha) {
+            if let Some(lanes) = incoming_lanes {
                 for lane_column in lanes {
                     let state = &mut self.lane_states[lane_column];
 
@@ -1612,6 +1764,8 @@ impl GitGraph {
 
                         if let Some(pending_selection_index) =
                             repository.update(cx, |repository, cx| {
+                                let ref_context =
+                                    RefOwnershipContext::from_branches(&repository.branch_list);
                                 let GraphDataResponse {
                                     commits,
                                     is_loading,
@@ -1622,6 +1776,7 @@ impl GitGraph {
                                     old_count..*commit_count,
                                     cx,
                                 );
+                                self.graph_data.set_ref_context(ref_context);
                                 self.graph_data.add_commits(commits);
 
                                 let pending_sha_index = self.pending_select_sha.and_then(|oid| {
@@ -1669,9 +1824,11 @@ impl GitGraph {
     fn fetch_initial_graph_data(&mut self, cx: &mut App) {
         if let Some(repository) = self.get_repository(cx) {
             repository.update(cx, |repository, cx| {
+                let ref_context = RefOwnershipContext::from_branches(&repository.branch_list);
                 let commits = repository
                     .graph_data(self.log_source.clone(), self.log_order, 0..usize::MAX, cx)
                     .commits;
+                self.graph_data.set_ref_context(ref_context);
                 self.graph_data.add_commits(commits);
             });
         }
@@ -3667,6 +3824,8 @@ impl GitGraph {
             AllCommitCount::NotLoaded => {
                 let (commit_count, is_loading) = if let Some(repository) = self.get_repository(cx) {
                     repository.update(cx, |repository, cx| {
+                        let ref_context =
+                            RefOwnershipContext::from_branches(&repository.branch_list);
                         // Start loading the graph data if we haven't started already
                         let GraphDataResponse {
                             commits,
@@ -3678,6 +3837,7 @@ impl GitGraph {
                             0..usize::MAX,
                             cx,
                         );
+                        self.graph_data.set_ref_context(ref_context);
                         self.graph_data.add_commits(commits);
                         (commits.len(), is_loading)
                     })
@@ -5143,6 +5303,126 @@ mod tests {
         if let Err(error) = verify_all_invariants(&graph_data, &commits) {
             panic!("Graph invariant violation for linear commits:\n{}", error);
         }
+    }
+
+    #[test]
+    fn test_git_graph_remote_ref_ownership_recolors_linear_history() {
+        let mut rng = StdRng::seed_from_u64(43);
+
+        let head = Oid::random(&mut rng);
+        let local_master = Oid::random(&mut rng);
+        let remote_master = Oid::random(&mut rng);
+        let ancestor = Oid::random(&mut rng);
+
+        let commits = vec![
+            Arc::new(InitialGraphCommitData {
+                sha: head,
+                parents: smallvec![local_master],
+                ref_names: vec!["HEAD -> codex/align".into(), "fork/codex/align".into()],
+            }),
+            Arc::new(InitialGraphCommitData {
+                sha: local_master,
+                parents: smallvec![remote_master],
+                ref_names: vec!["master".into()],
+            }),
+            Arc::new(InitialGraphCommitData {
+                sha: remote_master,
+                parents: smallvec![ancestor],
+                ref_names: vec![
+                    "origin/master".into(),
+                    "origin/HEAD".into(),
+                    "fork/master".into(),
+                    "fork/HEAD".into(),
+                ],
+            }),
+            Arc::new(InitialGraphCommitData {
+                sha: ancestor,
+                parents: smallvec![],
+                ref_names: Vec::new(),
+            }),
+        ];
+
+        let mut graph_data = GraphData::new(8);
+        graph_data.set_ref_context(RefOwnershipContext::from_branch_names(
+            &["codex/align", "master"],
+            &[
+                "fork/codex/align",
+                "origin/master",
+                "origin/HEAD",
+                "fork/master",
+                "fork/HEAD",
+            ],
+        ));
+        graph_data.add_commits(&commits);
+
+        assert_eq!(
+            graph_data
+                .commits
+                .iter()
+                .map(|commit| commit.lane)
+                .collect::<Vec<_>>(),
+            vec![0, 0, 0, 0]
+        );
+        assert_eq!(
+            graph_data
+                .commits
+                .iter()
+                .map(|commit| commit.color_idx)
+                .collect::<Vec<_>>(),
+            vec![0, 0, 1, 1]
+        );
+        assert_eq!(
+            graph_data
+                .lines
+                .iter()
+                .map(|line| line.color_idx)
+                .collect::<Vec<_>>(),
+            vec![0, 0, 1]
+        );
+
+        if let Err(error) = verify_all_invariants(&graph_data, &commits) {
+            panic!("Graph invariant violation for remote ref ownership:\n{error}");
+        }
+    }
+
+    #[test]
+    fn test_git_graph_tag_refs_do_not_change_ref_ownership_color() {
+        let mut rng = StdRng::seed_from_u64(44);
+
+        let head = Oid::random(&mut rng);
+        let tagged = Oid::random(&mut rng);
+        let ancestor = Oid::random(&mut rng);
+
+        let commits = vec![
+            Arc::new(InitialGraphCommitData {
+                sha: head,
+                parents: smallvec![tagged],
+                ref_names: vec!["HEAD -> main".into()],
+            }),
+            Arc::new(InitialGraphCommitData {
+                sha: tagged,
+                parents: smallvec![ancestor],
+                ref_names: vec!["tag: v0.11.6".into()],
+            }),
+            Arc::new(InitialGraphCommitData {
+                sha: ancestor,
+                parents: smallvec![],
+                ref_names: Vec::new(),
+            }),
+        ];
+
+        let mut graph_data = GraphData::new(8);
+        graph_data.set_ref_context(RefOwnershipContext::from_branch_names(&["main"], &[]));
+        graph_data.add_commits(&commits);
+
+        assert_eq!(
+            graph_data
+                .commits
+                .iter()
+                .map(|commit| commit.color_idx)
+                .collect::<Vec<_>>(),
+            vec![0, 0, 0]
+        );
     }
 
     #[test]

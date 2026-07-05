@@ -53,6 +53,15 @@ if [[ "$target_dir" = "debug" && "$local_install" = true ]]; then
     exit 1
 fi
 
+function open_from_launch_services() {
+    env -i \
+        HOME="$HOME" \
+        USER="${USER:-}" \
+        LOGNAME="${LOGNAME:-}" \
+        PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+        /usr/bin/open "$@"
+}
+
 
 # Get release channel
 pushd crates/zed
@@ -263,14 +272,14 @@ function sign_app_binaries() {
         echo "Installed application bundle: /Applications/$bundle_name"
         if [ "$open_result" = true ]; then
             echo "Opening /Applications/$bundle_name"
-            open "/Applications/$bundle_name"
+            open_from_launch_services "/Applications/$bundle_name"
         fi
         if [[ "$target_dir" != "debug" ]]; then
             echo "Local install requested - skipping DMG creation"
         fi
         return
     elif [ "$open_result" = true ]; then
-        open "$app_path"
+        open_from_launch_services "$app_path"
     fi
 
     if [[ "$target_dir" = "debug" ]]; then
@@ -315,7 +324,7 @@ function sign_app_binaries() {
         fi
 
         if [ "$open_result" = true ]; then
-            open $dmg_target_directory
+            open_from_launch_services "$dmg_target_directory"
         fi
     fi
 }
